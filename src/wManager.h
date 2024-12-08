@@ -47,4 +47,7 @@ void saveNewConfig();
 size_t getFreeHeap();
 size_t getMinFreeHeap();
 
+// New WiFi scanning function declarations
+void prepareWiFiScanning();
+
 #endif // _WMANAGER_H_

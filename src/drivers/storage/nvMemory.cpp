@@ -24,43 +24,42 @@ bool nvMemory::saveConfig(TSettings* Settings)
 {
     if (init())
     {
-        // Save Config in JSON format
         Serial.println(F("SPIFS: Saving configuration."));
 
-        // Create a JSON document
         StaticJsonDocument<512> json;
-        json[JSON_SPIFFS_KEY_POOLURL] = Settings->PoolAddress;
-        json[JSON_SPIFFS_KEY_POOLPORT] = Settings->PoolPort;
-        json[JSON_SPIFFS_KEY_POOLPASS] = Settings->PoolPassword;
-        json[JSON_SPIFFS_KEY_WALLETID] = Settings->BtcWallet;
-        json[JSON_SPIFFS_KEY_TIMEZONE] = Settings->Timezone;
-        json[JSON_SPIFFS_KEY_STATS2NV] = Settings->saveStats;
-        json[JSON_SPIFFS_KEY_INVCOLOR] = Settings->invertColors;
-        json[JSON_SPIFFS_KEY_DISPLAY] = Settings->displayEnabled;
-        json[JSON_SPIFFS_KEY_LED] = Settings->ledEnabled;
+        
+        // WiFi credentials
+        json["wifiSSID"] = Settings->WifiSSID;
+        json["wifiPassword"] = Settings->WifiPW;
 
-        // Open config file
+        // Pool settings
+        json["poolString"] = Settings->PoolAddress;
+        json["portNumber"] = Settings->PoolPort;
+        json["poolPassword"] = Settings->PoolPassword;
+        json["btcString"] = Settings->BtcWallet;
+        
+        json["gmtZone"] = Settings->Timezone;
+        json["saveStatsToNVS"] = Settings->saveStats;
+        json["invertColors"] = Settings->invertColors;
+
         File configFile = SPIFFS.open(JSON_CONFIG_FILE, "w");
         if (!configFile)
         {
-            // Error, file did not open
             Serial.println("SPIFS: Failed to open config file for writing");
             return false;
         }
 
-        // Serialize JSON data to write to file
         serializeJsonPretty(json, Serial);
         Serial.print('\n');
         if (serializeJson(json, configFile) == 0)
         {
-            // Error writing file
             Serial.println(F("SPIFS: Failed to write to file"));
             return false;
         }
-        // Close file
+        
         configFile.close();
         return true;
-    };
+    }
     return false;
 }
 
@@ -79,7 +78,6 @@ bool nvMemory::loadConfig(TSettings* Settings)
     {
         if (SPIFFS.exists(JSON_CONFIG_FILE))
         {
-            // The file exists, reading and loading
             File configFile = SPIFFS.open(JSON_CONFIG_FILE, "r");
             if (configFile)
             {
@@ -91,35 +89,33 @@ bool nvMemory::loadConfig(TSettings* Settings)
                 Serial.print('\n');
                 if (!error)
                 {
-                    Settings->PoolAddress = json[JSON_SPIFFS_KEY_POOLURL] | Settings->PoolAddress;
-                    strcpy(Settings->PoolPassword, json[JSON_SPIFFS_KEY_POOLPASS] | Settings->PoolPassword);
-                    strcpy(Settings->BtcWallet, json[JSON_SPIFFS_KEY_WALLETID] | Settings->BtcWallet);
-                    if (json.containsKey(JSON_SPIFFS_KEY_POOLPORT))
-                        Settings->PoolPort = json[JSON_SPIFFS_KEY_POOLPORT].as<int>();
-                    if (json.containsKey(JSON_SPIFFS_KEY_TIMEZONE))
-                        Settings->Timezone = json[JSON_SPIFFS_KEY_TIMEZONE].as<int>();
-                    if (json.containsKey(JSON_SPIFFS_KEY_STATS2NV))
-                        Settings->saveStats = json[JSON_SPIFFS_KEY_STATS2NV].as<bool>();
-                    if (json.containsKey(JSON_SPIFFS_KEY_INVCOLOR)) {
-                        Settings->invertColors = json[JSON_SPIFFS_KEY_INVCOLOR].as<bool>();
+                    // WiFi credentials
+                    Settings->WifiSSID = json["wifiSSID"] | Settings->WifiSSID;
+                    Settings->WifiPW = json["wifiPassword"] | Settings->WifiPW;
+
+                    // Pool settings
+                    Settings->PoolAddress = json["poolString"] | Settings->PoolAddress;
+                    if (json.containsKey("portNumber"))
+                        Settings->PoolPort = json["portNumber"].as<int>();
+                    
+                    strcpy(Settings->PoolPassword, json["poolPassword"] | Settings->PoolPassword);
+                    strcpy(Settings->BtcWallet, json["btcString"] | Settings->BtcWallet);
+                    
+                    if (json.containsKey("gmtZone"))
+                        Settings->Timezone = json["gmtZone"].as<int>();
+                    
+                    if (json.containsKey("saveStatsToNVS"))
+                        Settings->saveStats = json["saveStatsToNVS"].as<bool>();
+                    
+                    if (json.containsKey("invertColors")) {
+                        Settings->invertColors = json["invertColors"].as<bool>();
                     } else {
                         Settings->invertColors = false;
-                    }
-                    if (json.containsKey(JSON_SPIFFS_KEY_DISPLAY)) {
-                        Settings->displayEnabled = json[JSON_SPIFFS_KEY_DISPLAY].as<bool>();
-                    } else {
-                        Settings->displayEnabled = true;
-                    }
-                    if (json.containsKey(JSON_SPIFFS_KEY_LED)) {
-                        Settings->ledEnabled = json[JSON_SPIFFS_KEY_LED].as<bool>();
-                    } else {
-                        Settings->ledEnabled = true;
                     }
                     return true;
                 }
                 else
                 {
-                    // Error loading JSON data
                     Serial.println("SPIFS: Error parsing config file!");
                 }
             }

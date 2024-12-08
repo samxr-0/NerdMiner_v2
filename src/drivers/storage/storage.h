@@ -19,7 +19,7 @@
 #define DEFAULT_TIMEZONE	2
 #define DEFAULT_SAVESTATS	false
 #define DEFAULT_INVERTCOLORS	false
-#define DEFAULT_DISPLAY_ENABLED	true
+#define DEFAULT_DISPLAY_ENABLED	false
 #define DEFAULT_LED_ENABLED	true
 
 // JSON config files

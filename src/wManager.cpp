@@ -11,12 +11,18 @@
 #include <WiFi.h>
 #include <DNSServer.h>
 #include <WebServer.h>
+#include <Preferences.h>
 #include "drivers/displays/display.h"
 #include "version.h"
+#include "nvs_flash.h"
+#include "esp_system.h"
+#include "esp_err.h"
+#include "wifiManager.h"
 
 // Global instances
 WebServer webServer(80);
 DNSServer dnsServer;
+Preferences preferences;
 bool portalRunning = false;
 unsigned long portalStartTime = 0;
 
@@ -142,7 +148,68 @@ String generateClientScript() {
     js += "  }";
     js += "}";
     
-    js += "document.addEventListener('DOMContentLoaded', loadData);";
+    js += "function scanWiFi() {";
+    js += "  const statusText = document.getElementById('wifiScanStatus');";
+    js += "  const select = document.getElementById('wifiSelect');";
+    js += "  const currentOption = select.querySelector('option[selected]');";
+    js += "  statusText.textContent = 'Scanning...';";
+    js += "  fetch('/scan-wifi')";
+    js += "    .then(response => response.json())";
+    js += "    .then(data => {";
+    js += "      select.innerHTML = currentOption ? currentOption.outerHTML : '<option value=\"\">Select Network</option>';";
+    js += "      data.networks.forEach(network => {";
+    js += "        const option = document.createElement('option');";
+    js += "        option.value = network.ssid;";
+    js += "        option.text = `${network.ssid} (${network.rssi} dBm)`;";
+    js += "        select.appendChild(option);";
+    js += "      });";
+    js += "      const customOption = document.createElement('option');";
+    js += "      customOption.value = 'custom';";
+    js += "      customOption.text = 'Enter Custom Network';";
+    js += "      select.appendChild(customOption);";
+    js += "      statusText.textContent = data.networks.length + ' networks found';";
+    js += "    })";
+    js += "    .catch(error => {";
+    js += "      console.error('Scan WiFi Error:', error);";
+    js += "      statusText.textContent = 'Scan failed: ' + error.message;";
+    js += "    });";
+    js += "}";
+    
+    js += "function toggleCustomNetwork() {";
+    js += "  const select = document.getElementById('wifiSelect');";
+    js += "  const customNetworkDiv = document.getElementById('customNetworkDiv');";
+    js += "  customNetworkDiv.style.display = select.value === 'custom' ? 'block' : 'none';";
+    js += "}";
+    
+    js += "function factoryReset() {";
+    js += "  if (confirm('Are you sure you want to reset to factory defaults? This will erase all settings and restart the device.')) {";
+    js += "    document.getElementById('loadingOverlay').style.display = 'flex';";
+    js += "    document.getElementById('statusText').innerText = 'Resetting to factory defaults...';";
+    js += "    fetch('/factory-reset', { method: 'POST' })";
+    js += "      .then(response => {";
+    js += "        if (!response.ok) throw new Error('Reset failed');";
+    js += "        alert('Factory reset successful. Device will restart now. Please wait 30 seconds then reconnect to the device\\'s AP to reconfigure.');";
+    js += "        setTimeout(() => { window.location.href = '/'; }, 5000);";
+    js += "      })";
+    js += "      .catch(error => {";
+    js += "        console.error('Error:', error);";
+    js += "        alert('Error during factory reset. Device will restart. Please reconnect to the AP mode to reconfigure.');";
+    js += "        document.getElementById('loadingOverlay').style.display = 'none';";
+    js += "      });";
+    js += "  }";
+    js += "}";
+    
+    js += "document.addEventListener('DOMContentLoaded', function() {";
+    js += "  console.log('DOMContentLoaded event triggered');";
+    js += "  const wifiSelect = document.getElementById('wifiSelect');";
+    js += "  if (wifiSelect) {";
+    js += "    wifiSelect.addEventListener('change', toggleCustomNetwork);";
+    js += "  }";
+    js += "  loadData();";
+    js += "});";
+    
+    js += "window.onload = loadData;";
+    
     return js;
 }
 
@@ -186,6 +253,19 @@ String generateStyles() {
     css += ".spinner { width: 50px; height: 50px; border: 5px solid #1a1a1a; border-top: 5px solid #00ff00; border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 20px; }";
     css += ".toggle-btn { background: #00ff00; color: #1a1a1a; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin-bottom: 20px; font-weight: bold; width: 100%; }";
     css += ".toggle-btn:hover { background: #1a1a1a; color: #00ff00; border: 1px solid #00ff00; }";
+    css += ".factory-reset {";
+    css += "  background-color: #dc3545;";
+    css += "  color: white;";
+    css += "  padding: 10px 20px;";
+    css += "  border: none;";
+    css += "  border-radius: 4px;";
+    css += "  cursor: pointer;";
+    css += "  margin-top: 20px;";
+    css += "  width: 100%;";
+    css += "}";
+    css += ".factory-reset:hover {";
+    css += "  background-color: #c82333;";
+    css += "}";
     return css;
 }
 
@@ -200,6 +280,7 @@ String generateJsonResponse(bool success, const char* message = nullptr) {
 }
 
 void setupWebServer() {
+    // Root route handler
     webServer.on("/", HTTP_GET, []() {
         String html = "<!DOCTYPE html>";
         html += "<html><head>";
@@ -214,6 +295,29 @@ void setupWebServer() {
         // Form sections
         html += "<form method='POST' action='/save'>";
         
+        // WiFi Configuration Section
+        html += "<div class='section'>";
+        html += "<h2 class='section-title'>WiFi Configuration</h2>";
+        html += "<button type='button' onclick='scanWiFi()'>Scan WiFi Networks</button>";
+        html += "<div id='wifiScanStatus' style='color: #666; margin-top: 10px;'></div>";
+        html += "<label for='wifiSelect'>Select WiFi Network:</label>";
+        html += "<select id='wifiSelect' name='wifiSelect'>";
+        html += "<option value=''>Select Network</option>";
+
+        // Add current saved WiFi network as a pre-selected option
+        if (!Settings.WifiSSID.isEmpty()) {
+            html += "<option value='" + Settings.WifiSSID + "' selected>Current: " + Settings.WifiSSID + "</option>";
+        }
+
+        html += "</select>";
+        html += "<div id='customNetworkDiv' style='display: none;'>";
+        html += "<label for='customNetworkInput'>Enter Custom Network Name:</label>";
+        html += "<input type='text' id='customNetworkInput' name='customNetworkInput' placeholder='Custom Network SSID'>";
+        html += "</div>";
+        html += "<label for='wifiPassword'>WiFi Password:</label>";
+        html += "<input type='password' id='wifiPassword' name='wifiPassword'>";
+        html += "</div>";
+
         // Pool Configuration Section
         html += "<div class='section'>";
         html += "<h2 class='section-title'>Pool Configuration</h2>";
@@ -287,148 +391,226 @@ void setupWebServer() {
         // Submit Button
         html += "<input type='submit' value='Save Configuration' class='submit-btn'>";
         html += "</form>";
-
-        html += "<div id='overlay' class='overlay' style='display: none;'>";
-        html += "<div class='overlay-content'>";
-        html += "<div class='spinner'></div>";
-        html += "<p>Saving configuration...</p>";
-        html += "</div>";
-        html += "</div>";
-
+        
+        // Add factory reset button with confirmation dialog
+        html += "<script>";
+        html += "function factoryReset() {";
+        html += "  if (confirm('Are you sure you want to reset to factory defaults? This will erase all settings and restart the device.')) {";
+        html += "    document.getElementById('loadingOverlay').style.display = 'flex';";
+        html += "    document.getElementById('statusText').innerText = 'Resetting to factory defaults...';";
+        html += "    fetch('/factory-reset', { method: 'POST' })";
+        html += "      .then(response => {";
+        html += "        if (!response.ok) throw new Error('Reset failed');";
+        html += "        alert('Factory reset successful. Device will restart now. Please wait 30 seconds then reconnect to the device\\'s AP to reconfigure.');";
+        html += "        setTimeout(() => { window.location.href = '/'; }, 5000);";  // Redirect after 5 seconds
+        html += "      })";
+        html += "      .catch(error => {";
+        html += "        console.error('Error:', error);";
+        html += "        alert('Error during factory reset. Device will restart. Please reconnect to the AP mode to reconfigure.');";
+        html += "        document.getElementById('loadingOverlay').style.display = 'none';";
+        html += "      });";
+        html += "  }";
+        html += "}";
+        html += "</script>";
+        
+        // Add factory reset button with more spacing and warning color
+        html += "<button onclick='factoryReset()' style='margin-top: 20px; background-color: #ff4444;' class='factory-reset'>Factory Reset</button>";
+        
         html += "</div></body></html>";
         
         webServer.sendHeader("Content-Type", "text/html; charset=UTF-8");
         webServer.send(200, "text/html", html);
     });
 
-    // Add API endpoints for data
-    webServer.on("/api/pools", HTTP_GET, []() {
-        String json = "[";
-        for (size_t i = 0; i < POOL_COUNT; i++) {
+    // Captive portal handling
+    webServer.on("/generate_204", HTTP_GET, []() {
+        webServer.sendHeader("Location", "/");
+        webServer.send(302, "text/plain", "");
+    });
+
+    webServer.on("/fwlink", HTTP_GET, []() {
+        webServer.sendHeader("Location", "/");
+        webServer.send(302, "text/plain", "");
+    });
+
+    // WiFi scan route
+    webServer.on("/scan-wifi", HTTP_GET, []() {
+        int n = WiFi.scanNetworks();
+        String json = "{\"networks\":[";
+        for (int i = 0; i < n; ++i) {
             if (i > 0) json += ",";
             json += "{";
-            json += "\"name\":\"" + String(POOLS[i].name) + "\",";
-            json += "\"url\":\"" + String(POOLS[i].url) + "\",";
-            json += "\"port\":" + String(POOLS[i].port) + ",";
-            json += "\"webUrl\":\"" + String(POOLS[i].webUrl) + "\",";
-            json += "\"info\":\"" + String(POOLS[i].info) + "\"";
+            json += "\"ssid\":\"" + WiFi.SSID(i) + "\",";
+            json += "\"rssi\":" + String(WiFi.RSSI(i));
             json += "}";
         }
-        json += "]";
+        json += "]}";
+        
         webServer.send(200, "application/json", json);
+        WiFi.scanDelete(); // Clean up scan results
+    });
+
+    // Configuration save route
+    webServer.on("/save", HTTP_POST, []() {
+        nvMemory nvMem;
+        TSettings savedSettings;
+        
+        // First, try to load existing configuration
+        if (!nvMem.loadConfig(&savedSettings)) {
+            // If no existing config, initialize with defaults
+            savedSettings = Settings;
+        }
+
+        // Validate and update settings
+        if (webServer.hasArg("wifiSelect")) {
+            String selectedSSID = webServer.arg("wifiSelect");
+            String customSSID = webServer.arg("customNetworkInput");
+            String wifiPassword = webServer.arg("wifiPassword");
+
+            if (selectedSSID == "custom" && !customSSID.isEmpty()) {
+                savedSettings.WifiSSID = customSSID;
+            } else if (!selectedSSID.isEmpty()) {
+                savedSettings.WifiSSID = selectedSSID;
+            }
+
+            if (!wifiPassword.isEmpty()) {
+                savedSettings.WifiPW = wifiPassword;
+            }
+        }
+
+        // Pool Configuration
+        if (webServer.hasArg("poolSelect")) {
+            int poolIndex = webServer.arg("poolSelect").toInt();
+            if (poolIndex >= 0 && poolIndex < POOL_COUNT) {
+                if (poolIndex == 0) {  // Custom Pool
+                    if (webServer.hasArg("poolUrl") && webServer.hasArg("poolPort")) {
+                        savedSettings.PoolAddress = webServer.arg("poolUrl").c_str();
+                        savedSettings.PoolPort = webServer.arg("poolPort").toInt();
+                    }
+                } else {
+                    savedSettings.PoolAddress = POOLS[poolIndex].url;
+                    savedSettings.PoolPort = POOLS[poolIndex].port;
+                }
+            }
+        }
+
+        // Wallet Configuration
+        if (webServer.hasArg("wallet")) {
+            strncpy(savedSettings.BtcWallet, webServer.arg("wallet").c_str(), sizeof(savedSettings.BtcWallet) - 1);
+        }
+
+        if (webServer.hasArg("password")) {
+            strncpy(savedSettings.PoolPassword, webServer.arg("password").c_str(), sizeof(savedSettings.PoolPassword) - 1);
+        }
+
+        // Display Configuration
+        if (webServer.hasArg("display_enabled")) {
+            savedSettings.displayEnabled = webServer.arg("display_enabled").toInt() == 0;
+        }
+
+        // Timezone Configuration
+        if (webServer.hasArg("timezone")) {
+            savedSettings.Timezone = webServer.arg("timezone").toInt();
+        }
+
+        // Save Statistics Configuration
+        if (webServer.hasArg("save_stats")) {
+            savedSettings.saveStats = webServer.arg("save_stats").toInt() == 1;
+        }
+
+        // Create a detailed HTML response with saved parameters
+        String htmlResponse = "<!DOCTYPE html><html><head><title>Configuration Saved</title>";
+        htmlResponse += "<style>body { font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; }";
+        htmlResponse += "table { width: 100%; border-collapse: collapse; }";
+        htmlResponse += "th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }";
+        htmlResponse += "h1 { color: #4CAF50; }</style></head><body>";
+        htmlResponse += "<h1>Configuration Saved Successfully</h1>";
+        htmlResponse += "<table>";
+        
+        // WiFi Settings
+        htmlResponse += "<tr><th colspan='2'>WiFi Configuration</th></tr>";
+        htmlResponse += "<tr><td>Network SSID</td><td>" + savedSettings.WifiSSID + "</td></tr>";
+        
+        // Pool Settings
+        htmlResponse += "<tr><th colspan='2'>Pool Configuration</th></tr>";
+        htmlResponse += "<tr><td>Pool URL</td><td>" + String(savedSettings.PoolAddress) + "</td></tr>";
+        htmlResponse += "<tr><td>Pool Port</td><td>" + String(savedSettings.PoolPort) + "</td></tr>";
+        
+        // Wallet Settings
+        htmlResponse += "<tr><th colspan='2'>Wallet Configuration</th></tr>";
+        htmlResponse += "<tr><td>BTC Wallet Address</td><td>" + String(savedSettings.BtcWallet) + "</td></tr>";
+        
+        // Additional Settings
+        htmlResponse += "<tr><th colspan='2'>Additional Settings</th></tr>";
+        htmlResponse += "<tr><td>Timezone</td><td>" + String(savedSettings.Timezone) + "</td></tr>";
+        htmlResponse += "<tr><td>Save Statistics</td><td>" + String(savedSettings.saveStats ? "Enabled" : "Disabled") + "</td></tr>";
+        htmlResponse += "<tr><td>Display Enabled</td><td>" + String(savedSettings.displayEnabled ? "Yes" : "No") + "</td></tr>";
+        
+        htmlResponse += "</table>";
+        htmlResponse += "<p>Device will restart in 3 seconds...</p>";
+        htmlResponse += "<script>setTimeout(function(){window.location.href='/';}, 3000);</script>";
+        htmlResponse += "</body></html>";
+
+        // Save the updated configuration
+        if (nvMem.saveConfig(&savedSettings)) {
+            webServer.send(200, "text/html", htmlResponse);
+            delay(1000);
+            ESP.restart();
+        } else {
+            webServer.send(500, "text/plain", "Failed to save configuration");
+        }
+    });
+
+    // API routes for dynamic data
+    webServer.on("/api/pools", HTTP_GET, []() {
+        String jsonResponse = "[";
+        for (size_t i = 0; i < POOL_COUNT; i++) {
+            jsonResponse += "{";
+            jsonResponse += "\"name\":\"" + String(POOLS[i].name) + "\",";
+            jsonResponse += "\"url\":\"" + String(POOLS[i].url) + "\",";
+            jsonResponse += "\"port\":" + String(POOLS[i].port) + ",";
+            jsonResponse += "\"webUrl\":\"" + String(POOLS[i].webUrl ? POOLS[i].webUrl : "") + "\",";
+            jsonResponse += "\"info\":\"" + String(POOLS[i].info) + "\"";
+            jsonResponse += "}";
+            if (i < POOL_COUNT - 1) jsonResponse += ",";
+        }
+        jsonResponse += "]";
+        webServer.send(200, "application/json", jsonResponse);
     });
 
     webServer.on("/api/settings", HTTP_GET, []() {
-        String json = "{";
-        json += "\"poolUrl\":\"" + String(Settings.PoolAddress) + "\",";
-        json += "\"poolPort\":" + String(Settings.PoolPort) + ",";
-        json += "\"wallet\":\"" + String(Settings.BtcWallet) + "\",";
-        json += "\"password\":\"" + String(Settings.PoolPassword) + "\",";
-        json += "\"timezone\":" + String(Settings.Timezone) + ",";
-        json += "\"saveStats\":" + String(Settings.saveStats ? "true" : "false") + ",";
-        json += "\"displayEnabled\":" + String(Settings.displayEnabled ? "true" : "false");
-        json += "}";
-        webServer.send(200, "application/json", json);
+        String jsonResponse = "{";
+        jsonResponse += "\"wifiSSID\":\"" + Settings.WifiSSID + "\",";
+        jsonResponse += "\"poolUrl\":\"" + String(Settings.PoolAddress) + "\",";
+        jsonResponse += "\"poolPort\":" + String(Settings.PoolPort) + ",";
+        jsonResponse += "\"btcWallet\":\"" + String(Settings.BtcWallet) + "\",";
+        jsonResponse += "\"poolPassword\":\"" + String(Settings.PoolPassword) + "\",";
+        jsonResponse += "\"timezone\":" + String(Settings.Timezone) + ",";
+        jsonResponse += "\"saveStats\":" + String(Settings.saveStats ? "true" : "false") + ",";
+        jsonResponse += "\"displayEnabled\":" + String(Settings.displayEnabled ? "true" : "false");
+        jsonResponse += "}";
+        webServer.send(200, "application/json", jsonResponse);
     });
 
-    // Update save endpoint handler
-    webServer.on("/save", HTTP_POST, []() {
-        Serial.println("Save endpoint called");
-
-        // Get form data
-        String poolSelect = webServer.arg("poolSelect");
-        String poolUrl = webServer.arg("poolUrl");
-        String poolPort = webServer.arg("poolPort");
-        String wallet = webServer.arg("wallet");
-        String password = webServer.arg("password");
-        String timezone = webServer.arg("timezone");
-        String save_stats = webServer.arg("save_stats");
-        String display_enabled = webServer.arg("display_enabled");
-
-        // Validate required fields
-        if (wallet.length() == 0) {
-            webServer.send(400, "application/json", generateJsonResponse(false, "Wallet address is required"));
-            return;
-        }
-
-        // Update pool settings based on selection
-        if (poolSelect != "0") { // Not custom pool
-            int poolIndex = poolSelect.toInt();
-            if (poolIndex >= 0 && poolIndex < POOL_COUNT) {
-                Settings.PoolAddress = POOLS[poolIndex].url;
-                Settings.PoolPort = POOLS[poolIndex].port;
-            } else {
-                webServer.send(400, "application/json", generateJsonResponse(false, "Invalid pool selection"));
-                return;
-            }
-        } else {
-            // Validate custom pool settings
-            if (poolUrl.length() == 0 || poolPort.length() == 0) {
-                webServer.send(400, "application/json", generateJsonResponse(false, "Pool URL and Port are required for custom pool"));
-                return;
-            }
-            Settings.PoolAddress = poolUrl;
-            Settings.PoolPort = poolPort.toInt();
-        }
-
-        // Update other settings
-        strncpy(Settings.BtcWallet, wallet.c_str(), sizeof(Settings.BtcWallet) - 1);
-        Settings.BtcWallet[sizeof(Settings.BtcWallet) - 1] = '\0';
-
-        if (password.length() > 0) {
-            strncpy(Settings.PoolPassword, password.c_str(), sizeof(Settings.PoolPassword) - 1);
-            Settings.PoolPassword[sizeof(Settings.PoolPassword) - 1] = '\0';
-        }
-
-        if (timezone.length() > 0) {
-            Settings.Timezone = timezone.toInt();
-        }
-
-        Settings.saveStats = (save_stats == "1");
-        Settings.displayEnabled = (display_enabled == "1");
-
-        // Create response page
-        String response = "<html><head>";
-        response += "<meta http-equiv='refresh' content='2;url=/'>";
-        response += "<style>";
-        response += generateStyles();
-        response += "</style>";
-        response += "</head><body><div class='container'>";
-        response += "<div class='spinner'></div>";
-
-        try {
-            saveNewConfig();
-            response += "<h2>Configuration saved!</h2>";
-            response += "<p>Device is restarting...</p>";
-            webServer.sendHeader("Content-Type", "text/html; charset=UTF-8");
-            webServer.send(200, "text/html", response);
-            delay(500);  // Give time for the response to be sent
-            ESP.restart();
-        } catch (const std::exception& e) {
-            Serial.println("Failed to save configuration");
-            response += "<h2>Failed to save configuration</h2>";
-            response += "<p>Please try again</p>";
-            webServer.sendHeader("Content-Type", "text/html; charset=UTF-8");
-            webServer.send(200, "text/html", response);
-        }
+    // Add factory reset endpoint
+    webServer.on("/factory-reset", HTTP_POST, []() {
+        String response = generateJsonResponse(true, "Factory reset initiated");
+        webServer.send(200, "application/json", response);
+        webServer.client().flush();
+        delay(1000); // Give more time for the response to be sent
+        reset_configuration();
     });
 
-    // Add ping and restart endpoints
-    webServer.on("/ping", HTTP_GET, []() {
-        webServer.send(200, "text/plain", "pong");
-    });
-
-    webServer.on("/restart", HTTP_GET, []() {
-        webServer.send(200, "application/json", "{\"success\":true}");
-        delay(100);  // Small delay to ensure response is sent
-        ESP.restart();
-    });
-
-    // Handle not found
+    // 404 handler
     webServer.onNotFound([]() {
-        webServer.sendHeader("Location", "/", true);
+        // Redirect all unhandled routes to root
+        webServer.sendHeader("Location", "/");
         webServer.send(302, "text/plain", "");
     });
+
+    // Start the web server
+    webServer.begin();
+    Serial.println("Web Server Started");
 }
 
 void saveNewConfig() {
@@ -440,192 +622,127 @@ void saveNewConfig() {
         throw std::runtime_error("Failed to save settings to NVS");
     }
 
-    // Update display state to match settings
-    toggleDisplay(Settings.displayEnabled);
-
     Serial.println("saveNewConfig completed successfully");
 }
 
 void init_WifiManager() {
-    initial_free_heap = ESP.getFreeHeap();
-    min_free_heap = initial_free_heap;
-
-    // Load settings from NVS
-    nvMemory nvMem;
-    if (!nvMem.loadConfig(&Settings)) {
-        Serial.println("Failed to load settings from NVS, using defaults");
-    }
-
-    // Initialize display state from settings
-    toggleDisplay(Settings.displayEnabled);
-
-    WiFi.mode(WIFI_STA);
-    bool forceConfig = false;
-
-#if defined(PIN_BUTTON_2)
-    if (!digitalRead(PIN_BUTTON_2)) {
-        Serial.println(F("Button pressed to force start config mode"));
-        forceConfig = true;
-    }
-#endif
-
-    if (!nvMem.loadConfig(&Settings)) {
-        if (SDCrd.loadConfigFile(&Settings)) {
-            SDCrd.SD2nvMemory(&nvMem, &Settings);          
-        } else {
-            forceConfig = true;
-        }
-    }
-    
-    SDCrd.terminate();
-
-    mMonitor.NerdStatus = NM_Connecting;
-
-    if (forceConfig) {
-        drawSetupScreen();
-        mMonitor.NerdStatus = NM_waitingConfig;
-        
-        // Start captive portal
-        WiFi.mode(WIFI_AP);
-        WiFi.softAP("NerdMiner", "nerdminer");
-        delay(100);
-        
-        IPAddress apIP(192, 168, 4, 1);
-        WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
-        
-        // Start DNS server
-        dnsServer.start(DNS_PORT, "*", apIP);
-
-        // Setup web server routes
-        setupWebServer();
-        webServer.begin();
-        portalRunning = true;
-        portalStartTime = millis();
-        
-        Serial.println("Configuration portal started");
-        Serial.print("AP IP address: ");
-        Serial.println(WiFi.softAPIP());
-    } else {
-        // Try to connect to saved WiFi
-        WiFi.begin();
-        
-        int attempts = 0;
-        while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-            delay(500);
-            Serial.print(".");
-            attempts++;
-        }
-        
-        if (WiFi.status() != WL_CONNECTED) {
-            Serial.println("\nFailed to connect to saved WiFi");
-            drawSetupScreen();
-            mMonitor.NerdStatus = NM_waitingConfig;
-            
-            // Start captive portal
-            WiFi.mode(WIFI_AP);
-            WiFi.softAP("NerdMiner", "nerdminer");
-            delay(100);
-            
-            IPAddress apIP(192, 168, 4, 1);
-            WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
-            
-            dnsServer.start(DNS_PORT, "*", apIP);
-            setupWebServer();
-            webServer.begin();
-            portalRunning = true;
-            portalStartTime = millis();
-            
-            Serial.println("Configuration portal started");
-            Serial.print("AP IP address: ");
-            Serial.println(WiFi.softAPIP());
-        } else {
-            Serial.println("\nConnected to WiFi");
-            Serial.print("IP address: ");
-            Serial.println(WiFi.localIP());
-            mMonitor.NerdStatus = NM_Connected;
-            
-            // Start web server in regular WiFi mode too
-            setupWebServer();
-            webServer.begin();
-            portalRunning = true;  // Keep web server running
-        }
-    }
+    wifiManager.init();
 }
 
 void wifiManagerProcess() {
-    if (portalRunning) {
-        if (WiFi.getMode() == WIFI_AP) {
-            dnsServer.processNextRequest();
-        }
-        webServer.handleClient();
-        
-        // Only check timeout in AP mode
-        if (WiFi.getMode() == WIFI_AP && millis() - portalStartTime > CONFIG_PORTAL_TIMEOUT) {
-            Serial.println("Portal timeout reached");
-            WiFi.softAPdisconnect(true);
-            webServer.stop();
-            dnsServer.stop();
-            portalRunning = false;
-            ESP.restart();
-            return;
-        }
-    }
-    
-    // Check if WiFi is still connected when not in AP mode
-    if (WiFi.getMode() != WIFI_AP) {
-        static bool wasConnected = false;
-        bool isConnected = WiFi.status() == WL_CONNECTED;
-        
-        if (isConnected != wasConnected) {
-            if (isConnected) {
-                Serial.println("WiFi reconnected");
-                mMonitor.NerdStatus = NM_Connected;
-                // Restart web server after reconnection
-                if (!portalRunning) {
-                    setupWebServer();
-                    webServer.begin();
-                    portalRunning = true;
-                }
-            } else {
-                Serial.println("WiFi connection lost");
-                mMonitor.NerdStatus = NM_Connecting;
-                // Stop web server when disconnected
-                if (portalRunning) {
-                    webServer.stop();
-                    portalRunning = false;
-                }
-            }
-            wasConnected = isConnected;
-        }
+    // Process WiFi state
+    wifiManager.process();
 
-#if defined(PIN_BUTTON_2)
-        // Check for config portal trigger
-        if (!digitalRead(PIN_BUTTON_2)) {
-            Serial.println("Button pressed, starting config portal");
-            drawSetupScreen();
-            mMonitor.NerdStatus = NM_waitingConfig;
+    // Ensure web server is always running in AP or STA mode
+    if (!portalRunning) {
+        Serial.println("Starting Web Server");
+        setupWebServer();
+        portalRunning = true;
+        portalStartTime = millis();
+    }
+
+    // Enhanced DNS and Captive Portal Handling
+    if (WiFi.getMode() == WIFI_AP_STA || WiFi.getMode() == WIFI_AP) {
+        static unsigned long lastDNSStartTime = 0;
+        static bool dnsServerStarted = false;
+
+        // Retry DNS server start with exponential backoff
+        if (!dnsServerStarted || (millis() - lastDNSStartTime > 5000)) {
+            Serial.println("Configuring Captive Portal DNS Server");
             
-            WiFi.disconnect();
-            WiFi.mode(WIFI_AP);
-            WiFi.softAP("NerdMiner", "nerdminer");
-            delay(100);
+            // Stop any existing DNS server to prevent conflicts
+            dnsServer.stop();
             
+            // Set up DNS server with specific IP
             IPAddress apIP(192, 168, 4, 1);
             WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
             
+            // Start DNS server
             dnsServer.start(DNS_PORT, "*", apIP);
-            setupWebServer();
-            webServer.begin();
-            portalRunning = true;
-            portalStartTime = millis();
+            
+            // Update tracking variables
+            lastDNSStartTime = millis();
+            dnsServerStarted = true;
+            
+            Serial.println("DNS Server started for Captive Portal");
         }
-#endif
+
+        // Always process DNS requests
+        dnsServer.processNextRequest();
+    }
+
+    // Always handle web server client requests
+    webServer.handleClient();
+
+    // Connection state monitoring
+    static bool wasConnected = false;
+    bool isConnected = wifiManager.isConnected();
+    
+    if (isConnected && !wasConnected) {
+        Serial.println("\nWiFi Connected!");
+        Serial.print("IP Address: ");
+        Serial.println(wifiManager.getLocalIP());
+        
+        // Explicitly restart web server when WiFi connects
+        Serial.println("Restarting Web Server after WiFi Connection");
+        setupWebServer();
+        
+        mMonitor.NerdStatus = NM_Connecting;
+        wasConnected = true;
+    } else if (!isConnected && wasConnected) {
+        Serial.println("\nWiFi Disconnected!");
+        mMonitor.NerdStatus = NM_waitingConfig;
+        wasConnected = false;
+    }
+
+    // Optional: Add a timeout for configuration portal
+    if (portalRunning && (millis() - portalStartTime > CONFIG_PORTAL_TIMEOUT)) {
+        Serial.println("Configuration Portal Timeout, Restarting...");
+        ESP.restart();
     }
 }
 
 void reset_configuration() {
-    Serial.println("Resetting configuration...");
-    nvMem.deleteConfig();
+    Serial.println("Resetting configuration to factory defaults...");
+
+    // Disconnect WiFi completely
+    WiFi.disconnect(true, true);  // Disconnect and clear stored credentials
+    WiFi.mode(WIFI_OFF);
+    delay(100);
+
+    // Initialize NVS
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        // NVS partition was truncated and needs to be erased
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        err = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(err);
+
+    // Erase all of NVS
+    ESP_ERROR_CHECK(nvs_flash_erase());
+    ESP_ERROR_CHECK(nvs_flash_init());
+    
+    // Reset all settings to defaults
+    Settings = {}; // Clear entire structure first
+    Settings.WifiSSID = "";  // Explicitly clear WiFi settings
+    Settings.WifiPW = "";
+    Settings.PoolAddress = DEFAULT_POOLURL;
+    strcpy(Settings.BtcWallet, DEFAULT_WALLETID);
+    strcpy(Settings.PoolPassword, DEFAULT_POOLPASS);
+    Settings.PoolPort = DEFAULT_POOLPORT;
+    Settings.Timezone = DEFAULT_TIMEZONE;
+    Settings.saveStats = DEFAULT_SAVESTATS;
+    Settings.invertColors = DEFAULT_INVERTCOLORS;
+    Settings.displayEnabled = DEFAULT_DISPLAY_ENABLED;
+    Settings.ledEnabled = DEFAULT_LED_ENABLED;
+    
+    // Save the cleared settings
+    nvMemory nvMem;
+    nvMem.saveConfig(&Settings);
+    
+    Serial.println("Factory reset complete. Device will restart in AP mode...");
+    delay(1000);
     ESP.restart();
 }
 
