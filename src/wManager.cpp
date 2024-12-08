@@ -188,9 +188,9 @@ void init_WifiManager()
     wm.setShowPassword(false);
     wm.setHostname("NerdMiner");
     
-    // Setup menu items and parameters
+    // Setup menu items
     setupMenu();
-    setupParameters();  // Setup parameters before other WiFiManager settings
+    setupParameters();
     
     // Configure portal settings
     wm.setShowInfoErase(false);  // Hide erase button
@@ -199,7 +199,6 @@ void init_WifiManager()
     wm.setBreakAfterConfig(true);
     wm.setConfigPortalTimeout(0); // Disable timeout
     wm.setConnectTimeout(30);     // 30 seconds to attempt connection
-    wm.setTitle("NerdMiner Configuration");  // Set portal title
     
     // Set callbacks
     wm.setSaveConfigCallback(saveConfigCallback);
@@ -281,11 +280,6 @@ void setupParameters()
     
     char timezone_str[4];
     snprintf(timezone_str, sizeof(timezone_str), "%d", Settings.Timezone);
-    
-    // Create mining section header
-    const char* mining_html = "<div style='text-align:left;padding:5px;'><b><u>Mining Settings:</u></b></div>";
-    WiFiManagerParameter* custom_html_mining = new WiFiManagerParameter(mining_html);
-    wm.addParameter(custom_html_mining);
     
     // Add mining parameters
     pool_param = new WiFiManagerParameter("poolString", "Pool URL", Settings.PoolAddress.c_str(), 80);
