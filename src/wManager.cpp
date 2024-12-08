@@ -31,21 +31,96 @@ nvMemory nvMem;
 
 extern SDCard SDCrd;
 
+// Store parameter references
+WiFiManagerParameter* pool_param;
+WiFiManagerParameter* port_param;
+WiFiManagerParameter* wallet_param;
+WiFiManagerParameter* timezone_param;
+WiFiManagerParameter* save_stats_param;
+WiFiManagerParameter* password_param;
+#ifdef ESP32_2432S028R
+WiFiManagerParameter* invert_display_param;
+#endif
+
+// Menu items
+const char* MENU_ITEMS[] = {"wifi", "param", "info", "sep", "restart", "exit"};
+const uint8_t MENU_SIZE = 6;
+
+// Function prototypes
+void setupParameters();
+void setupMenu();
+void saveNewConfig(WiFiManagerParameter* pool, WiFiManagerParameter* port, 
+                  WiFiManagerParameter* password, WiFiManagerParameter* wallet,
+                  WiFiManagerParameter* timezone, WiFiManagerParameter* save_stats
+#ifdef ESP32_2432S028R
+                  , WiFiManagerParameter* invert_colors
+#endif
+);
+
+void setupMenu() {
+    wm.setMenu((const char**)MENU_ITEMS, MENU_SIZE);
+}
+
 void saveConfigCallback()
 // Callback notifying us of the need to save configuration
 {
     Serial.println("Should save config");
     shouldSaveConfig = true;    
-    //wm.setConfigPortalBlocking(false);
 }
 
-/* void saveParamsCallback()
-// Callback notifying us of the need to save configuration
-{
-    Serial.println("Should save config");
-    shouldSaveConfig = true;
+void saveParamsCallback() {
+    Serial.println("Saving parameters");
+    
+    // Get the parameter values
+    Settings.PoolAddress = String(pool_param->getValue());
+    Settings.PoolPort = atoi(port_param->getValue());
+    strncpy(Settings.BtcWallet, wallet_param->getValue(), sizeof(Settings.BtcWallet) - 1);
+    Settings.Timezone = atoi(timezone_param->getValue());
+    Settings.saveStats = (strncmp(save_stats_param->getValue(), "T", 1) == 0);
+    strncpy(Settings.PoolPassword, password_param->getValue(), sizeof(Settings.PoolPassword) - 1);
+    
+#ifdef ESP32_2432S028R
+    Settings.invertColors = (strncmp(invert_display_param->getValue(), "T", 1) == 0);
+#endif
+
+    // Save to non-volatile memory
     nvMem.saveConfig(&Settings);
-} */
+    Serial.println("Parameters saved");
+}
+
+void saveNewConfig(WiFiManagerParameter* pool, WiFiManagerParameter* port, 
+                  WiFiManagerParameter* password, WiFiManagerParameter* wallet,
+                  WiFiManagerParameter* timezone, WiFiManagerParameter* save_stats
+#ifdef ESP32_2432S028R
+                  , WiFiManagerParameter* invert_colors
+#endif
+) {
+    if (!pool || !port || !wallet || !timezone || !save_stats) {
+        Serial.println("Error: Invalid parameter pointers");
+        return;
+    }
+
+    Settings.PoolAddress = String(pool->getValue());
+    Settings.PoolPort = atoi(port->getValue());
+    strncpy(Settings.PoolPassword, password->getValue(), sizeof(Settings.PoolPassword));
+    strncpy(Settings.BtcWallet, wallet->getValue(), sizeof(Settings.BtcWallet));
+    Settings.Timezone = atoi(timezone->getValue());
+    Settings.saveStats = (strncmp(save_stats->getValue(), "T", 1) == 0);
+#ifdef ESP32_2432S028R
+    Settings.invertColors = (strncmp(invert_colors->getValue(), "T", 1) == 0);
+#endif
+
+    // Debug output
+    Serial.println("\nNew Configuration:");
+    Serial.print("Pool URL: "); Serial.println(Settings.PoolAddress);
+    Serial.print("Port: "); Serial.println(Settings.PoolPort);
+    Serial.print("BTC Wallet: "); Serial.println(Settings.BtcWallet);
+    Serial.print("Timezone: "); Serial.println(Settings.Timezone);
+    Serial.print("Save Stats: "); Serial.println(Settings.saveStats);
+#ifdef ESP32_2432S028R
+    Serial.print("Invert Colors: "); Serial.println(Settings.invertColors);
+#endif
+}
 
 void configModeCallback(WiFiManager* myWiFiManager)
 // Called when config mode launched
@@ -75,248 +150,196 @@ void init_WifiManager()
 #else
     Serial.begin(115200);
 #endif //MONITOR_SPEED
-    //Serial.setTxTimeoutMs(10);
 
-    //Init pin 15 to eneble 5V external power (LilyGo bug)
 #ifdef PIN_ENABLE5V
     pinMode(PIN_ENABLE5V, OUTPUT);
     digitalWrite(PIN_ENABLE5V, HIGH);
 #endif
 
-    // Change to true when testing to force configuration every time we run
     bool forceConfig = false;
 
 #if defined(PIN_BUTTON_2)
-    // Check if button2 is pressed to enter configMode with actual configuration
     if (!digitalRead(PIN_BUTTON_2)) {
         Serial.println(F("Button pressed to force start config mode"));
         forceConfig = true;
-        wm.setBreakAfterConfig(true); //Set to detect config edition and save
     }
 #endif
-    // Explicitly set WiFi mode
-    WiFi.mode(WIFI_STA);
 
+    WiFi.mode(WIFI_AP_STA);
+
+    // Load configuration from non-volatile memory or SD card
     if (!nvMem.loadConfig(&Settings))
     {
-        //No config file on internal flash.
         if (SDCrd.loadConfigFile(&Settings))
         {
-            //Config file on SD card.
-            SDCrd.SD2nvMemory(&nvMem, &Settings); // reboot on success.          
+            SDCrd.SD2nvMemory(&nvMem, &Settings);          
         }
         else
         {
-            //No config file on SD card. Starting wifi config server.
             forceConfig = true;
         }
     };
     
-    // Free the memory from SDCard class 
     SDCrd.terminate();
+
+    // Set dark theme and other WiFiManager settings
+    wm.setClass("invert");
+    wm.setDarkMode(true);
+    wm.setShowPassword(false);
+    wm.setHostname("NerdMiner");
     
-    // Reset settings (only for development)
-    //wm.resetSettings();
-
-    //Set dark theme
-    //wm.setClass("invert"); // dark theme
-
-    // Set config save notify callback
+    // Setup menu items and parameters
+    setupMenu();
+    setupParameters();  // Setup parameters before other WiFiManager settings
+    
+    // Configure portal settings
+    wm.setShowInfoErase(false);  // Hide erase button
+    wm.setShowInfoUpdate(false); // Hide update button
+    wm.setParamsPage(true);      // Enable parameters page
+    wm.setBreakAfterConfig(true);
+    wm.setConfigPortalTimeout(0); // Disable timeout
+    wm.setConnectTimeout(30);     // 30 seconds to attempt connection
+    wm.setTitle("NerdMiner Configuration");  // Set portal title
+    
+    // Set callbacks
     wm.setSaveConfigCallback(saveConfigCallback);
-    wm.setSaveParamsCallback(saveConfigCallback);
+    wm.setSaveParamsCallback(saveParamsCallback);
+    wm.setAPCallback(configModeCallback);
 
-    // Set callback that gets called when connecting to previous WiFi fails, and enters Access Point mode
-    wm.setAPCallback(configModeCallback);    
-
-    //Advanced settings
-    wm.setConfigPortalBlocking(false); //Hacemos que el portal no bloquee el firmware
-    wm.setConnectTimeout(40); // how long to try to connect for before continuing
-    wm.setConfigPortalTimeout(180); // auto close configportal after n seconds
-    // wm.setCaptivePortalEnable(false); // disable captive portal redirection
-    // wm.setAPClientCheck(true); // avoid timeout if client connected to softap
-    //wm.setTimeout(120);
-    //wm.setConfigPortalTimeout(120); //seconds
-
-    // Custom elements
-
-    // Text box (String) - 80 characters maximum
-    WiFiManagerParameter pool_text_box("Poolurl", "Pool url", Settings.PoolAddress.c_str(), 80);
-
-    // Need to convert numerical input to string to display the default value.
-    char convertedValue[6];
-    sprintf(convertedValue, "%d", Settings.PoolPort);
-
-    // Text box (Number) - 7 characters maximum
-    WiFiManagerParameter port_text_box_num("Poolport", "Pool port", convertedValue, 7);
-
-    // Text box (String) - 80 characters maximum
-    //WiFiManagerParameter password_text_box("Poolpassword", "Pool password (Optional)", Settings.PoolPassword, 80);
-
-    // Text box (String) - 80 characters maximum
-    WiFiManagerParameter addr_text_box("btcAddress", "Your BTC address", Settings.BtcWallet, 80);
-
-  // Text box (Number) - 2 characters maximum
-  char charZone[6];
-  sprintf(charZone, "%d", Settings.Timezone);
-  WiFiManagerParameter time_text_box_num("TimeZone", "TimeZone fromUTC (-12/+12)", charZone, 3);
-
-  WiFiManagerParameter features_html("<hr><br><label style=\"font-weight: bold;margin-bottom: 25px;display: inline-block;\">Features</label>");
-
-  char checkboxParams[24] = "type=\"checkbox\"";
-  if (Settings.saveStats)
-  {
-    strcat(checkboxParams, " checked");
-  }
-  WiFiManagerParameter save_stats_to_nvs("SaveStatsToNVS", "Save mining statistics to flash memory.", "T", 2, checkboxParams, WFM_LABEL_AFTER);
-  // Text box (String) - 80 characters maximum
-  WiFiManagerParameter password_text_box("Poolpassword - Optional", "Pool password", Settings.PoolPassword, 80);
-
-  // Add all defined parameters
-  wm.addParameter(&pool_text_box);
-  wm.addParameter(&port_text_box_num);
-  wm.addParameter(&password_text_box);
-  wm.addParameter(&addr_text_box);
-  wm.addParameter(&time_text_box_num);
-  wm.addParameter(&features_html);
-  wm.addParameter(&save_stats_to_nvs);
-  #ifdef ESP32_2432S028R
-  char checkboxParams2[24] = "type=\"checkbox\"";
-  if (Settings.invertColors)
-  {
-    strcat(checkboxParams2, " checked");
-  }
-  WiFiManagerParameter invertColors("inverColors", "Invert Display Colors (if the colors looks weird)", "T", 2, checkboxParams2, WFM_LABEL_AFTER);
-  wm.addParameter(&invertColors);
-  #endif
-
-    Serial.println("AllDone: ");
     if (forceConfig)    
     {
         // Run if we need a configuration
-        //No configuramos timeout al modulo
-        wm.setConfigPortalBlocking(true); //Hacemos que el portal SI bloquee el firmware
+        wm.setConfigPortalBlocking(true);
         drawSetupScreen();
         mMonitor.NerdStatus = NM_Connecting;
         if (!wm.startConfigPortal(DEFAULT_SSID, DEFAULT_WIFIPW))
         {
-            //Could be break forced after edditing, so save new config
-            Serial.println("failed to connect and hit timeout");
-            Settings.PoolAddress = pool_text_box.getValue();
-            Settings.PoolPort = atoi(port_text_box_num.getValue());
-            strncpy(Settings.PoolPassword, password_text_box.getValue(), sizeof(Settings.PoolPassword));
-            strncpy(Settings.BtcWallet, addr_text_box.getValue(), sizeof(Settings.BtcWallet));
-            Settings.Timezone = atoi(time_text_box_num.getValue());
-            //Serial.println(save_stats_to_nvs.getValue());
-            Settings.saveStats = (strncmp(save_stats_to_nvs.getValue(), "T", 1) == 0);
-            #ifdef ESP32_2432S028R
-                Settings.invertColors = (strncmp(invertColors.getValue(), "T", 1) == 0);
-            #endif
-            nvMem.saveConfig(&Settings);
-            delay(3*SECOND_MS);
-            //reset and try again, or maybe put it to deep sleep
-            ESP.restart();            
-        };
+            Serial.println("Failed to connect or hit timeout");
+            saveNewConfig(pool_param, port_param, password_param, 
+                         wallet_param, timezone_param, save_stats_param
+#ifdef ESP32_2432S028R
+                         , invert_display_param
+#endif
+            );
+            delay(3000);
+            ESP.restart();
+        }
     }
     else
     {
-        //Tratamos de conectar con la configuración inicial ya almacenada
         mMonitor.NerdStatus = NM_Connecting;
-        // disable captive portal redirection
-        wm.setCaptivePortalEnable(true); 
-        wm.setConfigPortalBlocking(true);
+        wm.setCaptivePortalEnable(true);
+        wm.setConfigPortalBlocking(false);
         wm.setEnableConfigPortal(true);
-        // if (!wm.autoConnect(Settings.WifiSSID.c_str(), Settings.WifiPW.c_str()))
+        
         if (!wm.autoConnect(DEFAULT_SSID, DEFAULT_WIFIPW))
         {
-            Serial.println("Failed to connect to configured WIFI, and hit timeout");
+            Serial.println("Failed to connect to configured WIFI");
             if (shouldSaveConfig) {
-                // Save new config            
-                Settings.PoolAddress = pool_text_box.getValue();
-                Settings.PoolPort = atoi(port_text_box_num.getValue());
-                strncpy(Settings.PoolPassword, password_text_box.getValue(), sizeof(Settings.PoolPassword));
-                strncpy(Settings.BtcWallet, addr_text_box.getValue(), sizeof(Settings.BtcWallet));
-                Settings.Timezone = atoi(time_text_box_num.getValue());
-                // Serial.println(save_stats_to_nvs.getValue());
-                Settings.saveStats = (strncmp(save_stats_to_nvs.getValue(), "T", 1) == 0);
-                #ifdef ESP32_2432S028R
-                Settings.invertColors = (strncmp(invertColors.getValue(), "T", 1) == 0);
-                #endif
-                nvMem.saveConfig(&Settings);
-                vTaskDelay(2000 / portTICK_PERIOD_MS);      
-            }        
-            ESP.restart();                            
-        } 
+                saveNewConfig(pool_param, port_param, password_param, 
+                            wallet_param, timezone_param, save_stats_param
+#ifdef ESP32_2432S028R
+                            , invert_display_param
+#endif
+                );
+            }
+            ESP.restart();
+        }
     }
-    
-    //Conectado a la red Wifi
+
     if (WiFi.status() == WL_CONNECTED) {
-        //tft.pushImage(0, 0, MinerWidth, MinerHeight, MinerScreen);
-        Serial.println("");
         Serial.println("WiFi connected");
         Serial.print("IP address: ");
         Serial.println(WiFi.localIP());
 
-        // Lets deal with the user config values
+        // Start the web portal in non-blocking mode with all parameters
+        wm.startWebPortal();
+        Serial.println("Configuration portal available at: " + WiFi.localIP().toString());
 
-        // Copy the string value
-        Settings.PoolAddress = pool_text_box.getValue();
-        //strncpy(Settings.PoolAddress, pool_text_box.getValue(), sizeof(Settings.PoolAddress));
-        Serial.print("PoolString: ");
-        Serial.println(Settings.PoolAddress);
+        // Save current configuration
+        saveNewConfig(pool_param, port_param, password_param, 
+                     wallet_param, timezone_param, save_stats_param
+#ifdef ESP32_2432S028R
+                     , invert_display_param
+#endif
+        );
 
-        //Convert the number value
-        Settings.PoolPort = atoi(port_text_box_num.getValue());
-        Serial.print("portNumber: ");
-        Serial.println(Settings.PoolPort);
-
-        // Copy the string value
-        strncpy(Settings.PoolPassword, password_text_box.getValue(), sizeof(Settings.PoolPassword));
-        Serial.print("poolPassword: ");
-        Serial.println(Settings.PoolPassword);
-
-        // Copy the string value
-        strncpy(Settings.BtcWallet, addr_text_box.getValue(), sizeof(Settings.BtcWallet));
-        Serial.print("btcString: ");
-        Serial.println(Settings.BtcWallet);
-
-        //Convert the number value
-        Settings.Timezone = atoi(time_text_box_num.getValue());
-        Serial.print("TimeZone fromUTC: ");
-        Serial.println(Settings.Timezone);
-
-        #ifdef ESP32_2432S028R
-        Settings.invertColors = (strncmp(invertColors.getValue(), "T", 1) == 0);
-        Serial.print("Invert Colors: ");
-        Serial.println(Settings.invertColors);        
-        #endif
-
-    }
-
-    // Save the custom parameters to FS
-    if (shouldSaveConfig)
-    {
-        nvMem.saveConfig(&Settings);
-        #ifdef ESP32_2432S028R
-         if (Settings.invertColors) ESP.restart();                
-        #endif
+        if (shouldSaveConfig) {
+            nvMem.saveConfig(&Settings);
+#ifdef ESP32_2432S028R
+            if (Settings.invertColors) ESP.restart();
+#endif
+        }
     }
 }
 
+void setupParameters()
+{
+    // Create parameters with current values
+    char port_str[8];
+    snprintf(port_str, sizeof(port_str), "%d", Settings.PoolPort);
+    
+    char timezone_str[4];
+    snprintf(timezone_str, sizeof(timezone_str), "%d", Settings.Timezone);
+    
+    // Create mining section header
+    const char* mining_html = "<div style='text-align:left;padding:5px;'><b><u>Mining Settings:</u></b></div>";
+    WiFiManagerParameter* custom_html_mining = new WiFiManagerParameter(mining_html);
+    wm.addParameter(custom_html_mining);
+    
+    // Add mining parameters
+    pool_param = new WiFiManagerParameter("poolString", "Pool URL", Settings.PoolAddress.c_str(), 80);
+    port_param = new WiFiManagerParameter("portNumber", "Pool Port", port_str, 7);
+    wallet_param = new WiFiManagerParameter("btcString", "BTC Wallet", Settings.BtcWallet, 80);
+    password_param = new WiFiManagerParameter("poolPassword", "Pool Password (Optional)", Settings.PoolPassword, 80);
+    
+    wm.addParameter(pool_param);
+    wm.addParameter(port_param);
+    wm.addParameter(wallet_param);
+    wm.addParameter(password_param);
+    
+    // Add additional parameters
+    timezone_param = new WiFiManagerParameter("gmtZone", "Time Zone", timezone_str, 3);
+    wm.addParameter(timezone_param);
+    
+    char checkboxParams[24] = "type=\"checkbox\"";
+    if (Settings.saveStats) {
+        strcat(checkboxParams, " checked");
+    }
+    save_stats_param = new WiFiManagerParameter("saveStatsToNVS", "Save Statistics", "T", 2, checkboxParams, WFM_LABEL_AFTER);
+    wm.addParameter(save_stats_param);
+
+#ifdef ESP32_2432S028R
+    char displayParams[24] = "type=\"checkbox\"";
+    if (Settings.invertColors) {
+        strcat(displayParams, " checked");
+    }
+    invert_display_param = new WiFiManagerParameter("invertColors", "Invert Display", "T", 2, displayParams, WFM_LABEL_AFTER);
+    wm.addParameter(invert_display_param);
+#endif
+}
+
 //----------------- MAIN PROCESS WIFI MANAGER --------------
-int oldStatus = 0;
-
 void wifiManagerProcess() {
-
-    wm.process(); // avoid delays() in loop when non-blocking and other long running code
-
-    int newStatus = WiFi.status();
+    static wl_status_t oldStatus = WL_IDLE_STATUS;
+    wl_status_t newStatus = WiFi.status();
+    
     if (newStatus != oldStatus) {
         if (newStatus == WL_CONNECTED) {
             Serial.println("CONNECTED - Current ip: " + WiFi.localIP().toString());
+            // Ensure web portal is running after reconnection
+            if (!wm.getWebPortalActive()) {
+                wm.startWebPortal();
+                Serial.println("Configuration portal available at: " + WiFi.localIP().toString());
+            }
         } else {
-            Serial.print("[Error] - current status: ");
+            Serial.print("[WIFI] Disconnected - status: ");
             Serial.println(newStatus);
+            mMonitor.NerdStatus = NM_waitingConfig;
         }
         oldStatus = newStatus;
     }
+
+    // Process WiFiManager portal
+    wm.process();
 }
