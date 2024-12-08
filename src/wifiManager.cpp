@@ -51,7 +51,7 @@ void WiFiManagerClass::process() {
         wifi_mode_t currentMode = WiFi.getMode();
         Serial.printf("Current WiFi Mode (Before): %d\n", currentMode);
         
-        // Explicitly set WiFi mode
+        // Explicitly set WiFi mode to AP_STA only for configuration
         WiFi.mode(WIFI_AP_STA);
         delay(500);  // Longer delay for mode change
         
@@ -76,6 +76,11 @@ void WiFiManagerClass::process() {
                     Serial.println("WiFi Connected!");
                     Serial.print("IP Address: ");
                     Serial.println(WiFi.localIP());
+                    
+                    // Stop soft AP and switch to STA mode
+                    WiFi.softAPdisconnect(true);  // Explicitly stop soft AP
+                    WiFi.mode(WIFI_STA);
+                    delay(200);  // Small delay to ensure mode change
                     
                     // Verify network configuration
                     IPAddress localIP = WiFi.localIP();
@@ -132,6 +137,12 @@ void WiFiManagerClass::process() {
 }
 
 void WiFiManagerClass::setupAccessPoint(const IPAddress& apIP) {
+    // Only configure soft AP if in configuration mode
+    if (mMonitor.NerdStatus != NM_waitingConfig) {
+        Serial.println("Not in configuration mode, skipping AP setup");
+        return;
+    }
+
     // Detailed Access Point configuration
     IPAddress subnet(255, 255, 255, 0);
     IPAddress gateway(192, 168, 4, 1);
@@ -139,7 +150,7 @@ void WiFiManagerClass::setupAccessPoint(const IPAddress& apIP) {
     // Verbose soft AP configuration
     Serial.println("Configuring Soft AP:");
     
-    // Explicitly set WiFi mode to AP_STA
+    // Ensure WiFi is in AP_STA mode for configuration
     WiFi.mode(WIFI_AP_STA);
     delay(200);
     
@@ -166,12 +177,6 @@ void WiFiManagerClass::setupAccessPoint(const IPAddress& apIP) {
     // Additional diagnostic information
     Serial.printf("Station IP: %s\n", WiFi.localIP().toString().c_str());
     Serial.printf("Soft AP IP: %s\n", WiFi.softAPIP().toString().c_str());
-    
-    // Additional network configuration logging
-    Serial.println("Network Configuration:");
-    Serial.printf("AP IP: %s\n", WiFi.softAPIP().toString().c_str());
-    Serial.printf("Gateway: %s\n", gateway.toString().c_str());
-    Serial.printf("Subnet: %s\n", subnet.toString().c_str());
 }
 
 void WiFiManagerClass::startAccessPoint() {
@@ -181,11 +186,9 @@ void WiFiManagerClass::startAccessPoint() {
     WiFi.disconnect(true, true);  // Disconnect and clear credentials
     
     // Explicitly set WiFi mode
-    WiFi.mode(WIFI_STA);
-    delay(200);
     WiFi.mode(WIFI_OFF);
     delay(200);
-    WiFi.mode(WIFI_AP_STA);
+    WiFi.mode(WIFI_AP_STA);  // Only use AP_STA for configuration
     delay(500);  // Longer delay for mode change
     
     // Setup Access Point
