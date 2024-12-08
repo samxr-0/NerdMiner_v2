@@ -15,5 +15,6 @@ void drawSetupScreen();
 void drawCurrentScreen(unsigned long mElapsed);
 void animateCurrentScreen(unsigned long frame);
 void doLedStuff(unsigned long frame);
+void toggleDisplay(bool enabled);
 
 #endif // DISPLAY_H

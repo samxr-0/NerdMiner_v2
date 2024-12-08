@@ -112,3 +112,11 @@ void doLedStuff(unsigned long frame)
 {
   currentDisplayDriver->doLedStuff(frame);
 }
+
+// Toggle display on/off
+void toggleDisplay(bool enabled)
+{
+  if (currentDisplayDriver && currentDisplayDriver->toggleDisplay) {
+    currentDisplayDriver->toggleDisplay(enabled);
+  }
+}

@@ -10,6 +10,7 @@
 #include "monitor.h"
 #include "OpenFontRender.h"
 #include "rotation.h"
+#include "display.h"
 
 #ifdef USE_LED
 #include <FastLED.h>
@@ -60,7 +61,6 @@ extern monitor_data mMonitor;
   RESET_SCREEN();                                                     \
   background.fillRect(0, 0, BUFFER_WIDTH, BUFFER_HEIGHT, BACK_COLOR); \
   \
-
 
 #define PRINT_STR(str)                                                \
   {                                                                   \
@@ -210,6 +210,14 @@ void dongleDisplay_DoLedStuff(unsigned long frame)
 #endif
 }
 
+void dongleDisplay_ToggleDisplay(bool enabled)
+{
+  digitalWrite(TFT_BL, enabled ? HIGH : LOW);
+  if (enabled) {
+    drawCurrentScreen(millis());
+  }
+}
+
 CyclicScreenFunction dongleDisplayCyclicScreens[] = {dongleDisplay_MinerScreen};
 
 DisplayDriver dongleDisplayDriver = {
@@ -221,6 +229,7 @@ DisplayDriver dongleDisplayDriver = {
     dongleDisplayCyclicScreens,
     dongleDisplay_AnimateCurrentScreen,
     dongleDisplay_DoLedStuff,
+    dongleDisplay_ToggleDisplay,
     SCREENS_ARRAY_SIZE(dongleDisplayCyclicScreens),
     0,
     WIDTH,

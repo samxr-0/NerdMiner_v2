@@ -19,6 +19,8 @@
 #define DEFAULT_TIMEZONE	2
 #define DEFAULT_SAVESTATS	false
 #define DEFAULT_INVERTCOLORS	false
+#define DEFAULT_DISPLAY_ENABLED	true
+#define DEFAULT_LED_ENABLED	true
 
 // JSON config files
 #define JSON_CONFIG_FILE	"/config.json"
@@ -33,6 +35,8 @@
 #define JSON_KEY_TIMEZONE	"Timezone"
 #define JSON_KEY_STATS2NV	"SaveStats"
 #define JSON_KEY_INVCOLOR	"invertColors"
+#define JSON_KEY_DISPLAY	"DisplayEnabled"
+#define JSON_KEY_LED	"LedEnabled"
 
 // JSON config file SPIFFS (different for backward compatibility with existing devices)
 #define JSON_SPIFFS_KEY_POOLURL		"poolString"
@@ -42,6 +46,8 @@
 #define JSON_SPIFFS_KEY_TIMEZONE	"gmtZone"
 #define JSON_SPIFFS_KEY_STATS2NV	"saveStatsToNVS"
 #define JSON_SPIFFS_KEY_INVCOLOR	"invertColors"
+#define JSON_SPIFFS_KEY_DISPLAY	"displayEnabled"
+#define JSON_SPIFFS_KEY_LED	"ledEnabled"
 
 // settings
 struct TSettings
@@ -55,6 +61,8 @@ struct TSettings
 	int Timezone{ DEFAULT_TIMEZONE };
 	bool saveStats{ DEFAULT_SAVESTATS };
 	bool invertColors{ DEFAULT_INVERTCOLORS };
+	bool displayEnabled{ DEFAULT_DISPLAY_ENABLED };
+	bool ledEnabled{ DEFAULT_LED_ENABLED };
 };
 
 #endif // _STORAGE_H_

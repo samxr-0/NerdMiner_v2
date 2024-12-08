@@ -37,7 +37,11 @@
 enum NMState {
   NM_waitingConfig,
   NM_Connecting,
-  NM_hashing
+  NM_Connected,
+  NM_hashing,
+  NM_foundShare,
+  NM_error,
+  NM_lowHashrate
 };
 
 typedef struct{

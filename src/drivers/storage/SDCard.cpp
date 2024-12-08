@@ -128,8 +128,16 @@ bool SDCard::loadConfigFile(TSettings* Settings)
                     } else {
                         Settings->invertColors = false;
                     }
-                    // Serial.printf("Carteira Lida SD:%s\n", Settings.BtcWallet);       
-                    Serial.printf("Carteira Lida SDs:%s\n", Settings->BtcWallet);                       
+                    if (json.containsKey(JSON_KEY_DISPLAY)) {
+                        Settings->displayEnabled = json[JSON_KEY_DISPLAY].as<bool>();
+                    } else {
+                        Settings->displayEnabled = true;
+                    }
+                    if (json.containsKey(JSON_KEY_LED)) {
+                        Settings->ledEnabled = json[JSON_KEY_LED].as<bool>();
+                    } else {
+                        Settings->ledEnabled = true;
+                    }
                     return true;
                 }
                 else

@@ -9,6 +9,7 @@ typedef void (*ScreenFunction)(void);
 typedef void (*CyclicScreenFunction)(unsigned long mElapsed);
 typedef void (*AnimateCurrentScreenFunction)(unsigned long frame);
 typedef void (*DoLedStuff)(unsigned long frame);
+typedef void (*ToggleDisplayFunction)(bool enabled);
 
 typedef struct
 {
@@ -20,6 +21,7 @@ typedef struct
   CyclicScreenFunction *cyclic_screens;              // Array of cyclic screens
   AnimateCurrentScreenFunction animateCurrentScreen; // Animate the current cyclic screen
   DoLedStuff doLedStuff;                             // Do LED stuff
+  ToggleDisplayFunction toggleDisplay;               // Toggle display on/off
   int num_cyclic_screens;                            // Number of cyclic screens
   int current_cyclic_screen;                         // Current cyclic screen being displayed
   int screenWidth;                                   // Screen width

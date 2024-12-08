@@ -4,7 +4,6 @@
 #include <esp_task_wdt.h>
 #include <nvs_flash.h>
 #include <nvs.h>
-//#include "ShaTests/nerdSHA256.h"
 #include "ShaTests/nerdSHA256plus.h"
 #include "stratum.h"
 #include "mining.h"
@@ -14,6 +13,12 @@
 #include "drivers/displays/display.h"
 #include "drivers/storage/storage.h"
 
+// Constants
+#define MIN_HASHRATE 50  // KH/s
+#define DELAY 100
+#define REDRAW_EVERY 10
+
+// Global variables
 nvs_handle_t stat_handle;
 
 uint32_t templates = 0;
@@ -43,10 +48,59 @@ mining_job mJob;
 monitor_data mMonitor;
 bool isMinerSuscribed = false;
 unsigned long mLastTXtoPool = millis();
+unsigned long mStart0Hashrate = 0; // Variable for tracking inactivity periods
 
 int saveIntervals[7] = {5 * 60, 15 * 60, 30 * 60, 1 * 3600, 3 * 3600, 6 * 3600, 12 * 3600};
 int saveIntervalsSize = sizeof(saveIntervals)/sizeof(saveIntervals[0]);
 int currentIntervalIndex = 0;
+
+// Forward declarations
+void restoreStat();
+void saveStat();
+void resetStat();
+bool checkPoolConnection(void);
+bool checkPoolInactivity(unsigned int keepAliveTime, unsigned long inactivityTime);
+void runStratumWorker(void *name);
+void runMiner(void * task_id);
+void runMonitor(void *name);
+
+// Function implementations
+void restoreStat() {
+  if(!Settings.saveStats) return;
+  esp_err_t ret = nvs_flash_init();
+  if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+    Serial.printf("[MONITOR] NVS partition is full or has invalid version, erasing...\n");
+    nvs_flash_init();
+  }
+
+  ret = nvs_open("state", NVS_READWRITE, &stat_handle);
+
+  size_t required_size = sizeof(double);
+  nvs_get_blob(stat_handle, "best_diff", &best_diff, &required_size);
+  nvs_get_u32(stat_handle, "Mhashes", &Mhashes);
+  nvs_get_u32(stat_handle, "shares", &shares);
+  nvs_get_u32(stat_handle, "valids", &valids);
+  nvs_get_u32(stat_handle, "templates", &templates);
+  nvs_get_u64(stat_handle, "upTime", &upTime);
+}
+
+void saveStat() {
+  if(!Settings.saveStats) return;
+  Serial.printf("[MONITOR] Saving stats\n");
+  nvs_set_blob(stat_handle, "best_diff", &best_diff, sizeof(double));
+  nvs_set_u32(stat_handle, "Mhashes", Mhashes);
+  nvs_set_u32(stat_handle, "shares", shares);
+  nvs_set_u32(stat_handle, "valids", valids);
+  nvs_set_u32(stat_handle, "templates", templates);
+  nvs_set_u64(stat_handle, "upTime", upTime + (esp_timer_get_time()/1000000));
+}
+
+void resetStat() {
+  Serial.printf("[MONITOR] Resetting NVS stats\n");
+  templates = hashes = Mhashes = totalKHashes = elapsedKHs = upTime = shares = valids = 0;
+  best_diff = 0.0;
+  saveStat();
+}
 
 bool checkPoolConnection(void) {
   
@@ -55,6 +109,7 @@ bool checkPoolConnection(void) {
   }
   
   isMinerSuscribed = false;
+  mMonitor.NerdStatus = NM_Connecting;  // Set status to connecting when attempting pool connection
 
   Serial.println("Client not connected, trying to connect..."); 
   
@@ -76,10 +131,6 @@ bool checkPoolConnection(void) {
   return true;
 }
 
-//Implements a socketKeepAlive function and 
-//checks if pool is not sending any data to reconnect again.
-//Even connection could be alive, pool could stop sending new job NOTIFY
-unsigned long mStart0Hashrate = 0;
 bool checkPoolInactivity(unsigned int keepAliveTime, unsigned long inactivityTime){ 
 
     unsigned long currentKHashes = (Mhashes*1000) + hashes/1000;
@@ -135,14 +186,15 @@ void runStratumWorker(void *name) {
     } 
 
     if(!checkPoolConnection()){
+      mMonitor.NerdStatus = NM_Connecting;
       //If server is not reachable add random delay for connection retries
       srand(millis());
       //Generate value between 1 and 120 secs
       vTaskDelay(((1 + rand() % 120) * 1000) / portTICK_PERIOD_MS);
+      continue;
     }
 
     if(!isMinerSuscribed){
-
       //Stop miner current jobs
       mMiner.inRun = false;
       mWorker = init_mining_subscribe();
@@ -156,14 +208,14 @@ void runStratumWorker(void *name) {
       strcpy(mWorker.wName, Settings.BtcWallet);
       strcpy(mWorker.wPass, Settings.PoolPassword);
       // STEP 2: Pool authorize work (Block Info)
-      tx_mining_auth(client, mWorker.wName, mWorker.wPass); //Don't verifies authoritzation, TODO
-      //tx_mining_auth2(client, mWorker.wName, mWorker.wPass); //Don't verifies authoritzation, TODO
+      tx_mining_auth(client, mWorker.wName, mWorker.wPass);
 
       // STEP 3: Suggest pool difficulty
       tx_suggest_difficulty(client, DEFAULT_DIFFICULTY);
 
-      isMinerSuscribed=true;
+      isMinerSuscribed = true;
       mLastTXtoPool = millis();
+      mMonitor.NerdStatus = NM_Connected; // Set status to connected after successful subscription
     }
 
     //Check if pool is down for almost 5minutes and then restart connection with pool (1min=600000ms)
@@ -213,12 +265,6 @@ void runStratumWorker(void *name) {
   
 }
 
-
-//////////////////THREAD CALLS///////////////////
-
-//This works only with one thread, TODO -> Class or miner_data for each thread
-
-  
 void runMiner(void * task_id) {
 
   unsigned int miner_id = (uint32_t)task_id;
@@ -250,7 +296,6 @@ void runMiner(void * task_id) {
     //Calcular midstate
     nerd_mids(&nerdMidstate, mMiner.bytearray_blockheader); //NerdShaplus
 
-
     // search a valid nonce
     unsigned long nonce = TARGET_NONCE - MAX_NONCE;
     // split up odd/even nonces between miner tasks
@@ -268,50 +313,53 @@ void runMiner(void * task_id) {
     
     bool is16BitShare=true;  
     Serial.println(">>> STARTING TO HASH NONCES");
+    
+    // Track hashrate for low hashrate detection
+    unsigned long lastHashCheck = millis();
+    unsigned long lastHashCount = hashes;
+    
     while(true) {
       if (miner_id == 0)
         memcpy(mMiner.bytearray_blockheader + 76, &nonce, 4);
       else
         memcpy(mMiner.bytearray_blockheader2 + 76, &nonce, 4);
 
-
-      //nerd_double_sha2(&nerdMidstate, header64, hash);
       is16BitShare=nerd_sha256d(&nerdMidstate, header64, hash); //Boosted 80Khs sha
 
-      /*Serial.print("hash1: ");
-      for (size_t i = 0; i < 32; i++)
-            Serial.printf("%02x", hash[i]);
-        Serial.println("");  
-      Serial.print("hash2: ");
-      for (size_t i = 0; i < 32; i++)
-            Serial.printf("%02x", hash2[i]);
-        Serial.println("");  */
-
       hashes++;
+      
+      // Check hashrate every 30 seconds
+      if (millis() - lastHashCheck >= 30000) {
+        unsigned long hashRate = (hashes - lastHashCount) / 30; // Hashes per second
+        if (hashRate < MIN_HASHRATE) {
+          mMonitor.NerdStatus = NM_lowHashrate;
+        } else if (mMonitor.NerdStatus == NM_lowHashrate) {
+          mMonitor.NerdStatus = NM_hashing; // Only change back if we were in low hashrate state
+        }
+        lastHashCheck = millis();
+        lastHashCount = hashes;
+      }
+
       if (nonce > TARGET_NONCE) break; //exit
-      if(!mMiner.inRun) { Serial.println ("MINER WORK ABORTED >> waiting new job"); break;}
+      if(!mMiner.inRun) { 
+        Serial.println ("MINER WORK ABORTED >> waiting new job"); 
+        break;
+      }
 
       // check if 16bit share
       if(hash[31] !=0 || hash[30] !=0) {
-      //if(!is16BitShare){
-        // increment nonce
         nonce += 2;
         continue;
       }
 
-      //Check target to submit
-      //Difficulty of 1 > 0x00000000FFFF0000000000000000000000000000000000000000000000000000
-      //NM2 pool diff 1e-9 > Target = diff_1 / diff_pool > 0x00003B9ACA00....00
-      //Swapping diff bytes little endian >>>>>>>>>>>>>>>> 0x0000DC59D300....00  
-      //if((hash[29] <= 0xDC) && (hash[28] <= 0x59))     //0x00003B9ACA00  > diff value for 1e-9
       double diff_hash = diff_from_target(hash);
 
       // update best diff
       if (diff_hash > best_diff)
         best_diff = diff_hash;
 
-      if(diff_hash > mMiner.poolDifficulty)//(hash[29] <= 0x3B)//(diff_hash > 1e-9)
-      {
+      if(diff_hash > mMiner.poolDifficulty) {
+        mMonitor.NerdStatus = NM_foundShare;
         tx_mining_submit(client, mWorker, mJob, nonce);
         Serial.print("   - Current diff share: "); Serial.println(diff_hash,12);
         Serial.print("   - Current pool diff : "); Serial.println(mMiner.poolDifficulty,12);
@@ -327,12 +375,14 @@ void runMiner(void * task_id) {
         }
         #endif
         Serial.println("");
-        mLastTXtoPool = millis();  
+        mLastTXtoPool = millis();
+        // Reset status after brief flash
+        vTaskDelay(200 / portTICK_PERIOD_MS);
+        mMonitor.NerdStatus = NM_hashing;
       }
       
       // check if 32bit share
       if(hash[29] !=0 || hash[28] !=0) {
-        // increment nonce
         nonce += 2;
         continue;
       }
@@ -343,15 +393,10 @@ void runMiner(void * task_id) {
         Serial.printf("[WORKER] %d CONGRATULATIONS! Valid block found with nonce: %d | 0x%x\n", miner_id, nonce, nonce);
         valids++;
         Serial.printf("[WORKER]  %d  Submitted work valid!\n", miner_id);
-        // wait for new job
         break;
       }
-      // increment nonce
       nonce += 2;
-    } // exit if found a valid result or nonce > MAX_NONCE
-
-    //wc_Sha256Free(&sha256);
-    //wc_Sha256Free(midstate);
+    }
 
     mMiner.inRun = false;
     Serial.print(">>> Finished job waiting new data from pool");
@@ -365,46 +410,6 @@ void runMiner(void * task_id) {
     if (esp_task_wdt_reset() == ESP_OK)
       Serial.print(">>> Resetting watchdog timer");
   }
-}
-
-#define DELAY 100
-#define REDRAW_EVERY 10
-
-void restoreStat() {
-  if(!Settings.saveStats) return;
-  esp_err_t ret = nvs_flash_init();
-  if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-    Serial.printf("[MONITOR] NVS partition is full or has invalid version, erasing...\n");
-    nvs_flash_init();
-  }
-
-  ret = nvs_open("state", NVS_READWRITE, &stat_handle);
-
-  size_t required_size = sizeof(double);
-  nvs_get_blob(stat_handle, "best_diff", &best_diff, &required_size);
-  nvs_get_u32(stat_handle, "Mhashes", &Mhashes);
-  nvs_get_u32(stat_handle, "shares", &shares);
-  nvs_get_u32(stat_handle, "valids", &valids);
-  nvs_get_u32(stat_handle, "templates", &templates);
-  nvs_get_u64(stat_handle, "upTime", &upTime);
-}
-
-void saveStat() {
-  if(!Settings.saveStats) return;
-  Serial.printf("[MONITOR] Saving stats\n");
-  nvs_set_blob(stat_handle, "best_diff", &best_diff, sizeof(double));
-  nvs_set_u32(stat_handle, "Mhashes", Mhashes);
-  nvs_set_u32(stat_handle, "shares", shares);
-  nvs_set_u32(stat_handle, "valids", valids);
-  nvs_set_u32(stat_handle, "templates", templates);
-  nvs_set_u64(stat_handle, "upTime", upTime + (esp_timer_get_time()/1000000));
-}
-
-void resetStat() {
-    Serial.printf("[MONITOR] Resetting NVS stats\n");
-    templates = hashes = Mhashes = totalKHashes = elapsedKHs = upTime = shares = valids = 0;
-    best_diff = 0.0;
-    saveStat();
 }
 
 void runMonitor(void *name)

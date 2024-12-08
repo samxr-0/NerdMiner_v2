@@ -1,4 +1,3 @@
-
 #include <Wire.h>
 
 #include <Arduino.h>
@@ -13,6 +12,7 @@
 #include "monitor.h"
 #include "drivers/displays/display.h"
 #include "drivers/storage/SDCard.h"
+#include "drivers/storage/nvMemory.h"
 #include "timeconst.h"
 
 #ifdef TOUCH_ENABLE
@@ -43,6 +43,8 @@ extern monitor_data mMonitor;
 #else  
   SDCard SDCrd = SDCard();
 #endif
+
+nvMemory nvMem;
 
 /**********************⚡ GLOBAL Vars *******************************/
 
