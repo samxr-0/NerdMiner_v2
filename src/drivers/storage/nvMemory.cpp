@@ -41,6 +41,9 @@ bool nvMemory::saveConfig(TSettings* Settings)
         json["gmtZone"] = Settings->Timezone;
         json["saveStatsToNVS"] = Settings->saveStats;
         json["invertColors"] = Settings->invertColors;
+        
+        // Add log level to JSON configuration
+        json["logLevel"] = static_cast<int>(Settings->LogLevel);
 
         File configFile = SPIFFS.open(JSON_CONFIG_FILE, "w");
         if (!configFile)
@@ -112,6 +115,22 @@ bool nvMemory::loadConfig(TSettings* Settings)
                     } else {
                         Settings->invertColors = false;
                     }
+                    
+                    // Add log level configuration
+                    if (json.containsKey("logLevel")) {
+                        int logLevelValue = json["logLevel"].as<int>();
+                        // Validate log level is within enum range
+                        if (logLevelValue >= LOG_NONE && logLevelValue <= LOG_DEBUG) {
+                            Settings->LogLevel = static_cast<LogVerbosity>(logLevelValue);
+                        } else {
+                            // Default to LOG_INFO if invalid
+                            Settings->LogLevel = LOG_INFO;
+                        }
+                    } else {
+                        // Default to LOG_INFO if not specified
+                        Settings->LogLevel = LOG_INFO;
+                    }
+                    
                     return true;
                 }
                 else

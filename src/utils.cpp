@@ -1,4 +1,3 @@
-
 #include <Arduino.h>
 #include "utils.h"
 #include "mining.h"
@@ -79,33 +78,35 @@ static const double truediffone = 2695953529101130949315647634472399133601089873
 /* Converts a little endian 256 bit value to a double */
 double le256todouble(const void *target)
 {
-	uint64_t *data64;
-	double dcut64;
+    const uint8_t *targetBytes = static_cast<const uint8_t*>(target);
+    uint64_t data64;
+    double dcut64 = 0.0;
 
-	data64 = (uint64_t *)(target + 24);
-	dcut64 = *data64 * 6277101735386680763835789423207666416102355444464034512896.0;
+    // Read 64-bit values from the last 32 bytes of the 256-bit target
+    data64 = *reinterpret_cast<const uint64_t*>(targetBytes + 24);
+    dcut64 = data64 * 6277101735386680763835789423207666416102355444464034512896.0;
 
-	data64 = (uint64_t *)(target + 16);
-	dcut64 += *data64 * 340282366920938463463374607431768211456.0;
+    data64 = *reinterpret_cast<const uint64_t*>(targetBytes + 16);
+    dcut64 += data64 * 340282366920938463463374607431768211456.0;
 
-	data64 = (uint64_t *)(target + 8);
-	dcut64 += *data64 * 18446744073709551616.0;
+    data64 = *reinterpret_cast<const uint64_t*>(targetBytes + 8);
+    dcut64 += data64 * 18446744073709551616.0;
 
-	data64 = (uint64_t *)(target);
-	dcut64 += *data64;
+    data64 = *reinterpret_cast<const uint64_t*>(targetBytes);
+    dcut64 += data64;
 
-	return dcut64;
+    return dcut64;
 }
 
 double diff_from_target(void *target)
 {
-	double d64, dcut64;
+    double d64, dcut64;
 
-	d64 = truediffone;
-	dcut64 = le256todouble(target);
-	if (unlikely(!dcut64))
-		dcut64 = 1;
-	return d64 / dcut64;
+    d64 = truediffone;
+    dcut64 = le256todouble(target);
+    if (unlikely(!dcut64))
+        dcut64 = 1;
+    return d64 / dcut64;
 }
 
 /****************** PREMINING CALCULATIONS ********************/
@@ -416,58 +417,58 @@ miner_data calculateMiningData(mining_subscribe& mWorker, mining_job mJob){
  * associated suitable for Mega, Giga etc. Buf array needs to be long enough */
 void suffix_string(double val, char *buf, size_t bufsiz, int sigdigits)
 {
-	const double kilo = 1000;
-	const double mega = 1000000;
-	const double giga = 1000000000;
-	const double tera = 1000000000000;
-	const double peta = 1000000000000000;
-	const double exa  = 1000000000000000000;
-	// minimum diff value to display
-	const double min_diff = 0.001;
+    const double kilo = 1000;
+    const double mega = 1000000;
+    const double giga = 1000000000;
+    const double tera = 1000000000000;
+    const double peta = 1000000000000000;
+    const double exa  = 1000000000000000000;
+    // minimum diff value to display
+    const double min_diff = 0.001;
     const byte maxNdigits = 2;
-	char suffix[2] = "";
-	bool decimal = true;
-	double dval;
+    char suffix[2] = "";
+    bool decimal = true;
+    double dval;
 
-	if (val >= exa) {
-		val /= peta;
-		dval = val / kilo;
-		strcpy(suffix, "E");
-	} else if (val >= peta) {
-		val /= tera;
-		dval = val / kilo;
-		strcpy(suffix, "P");
-	} else if (val >= tera) {
-		val /= giga;
-		dval = val / kilo;
-		strcpy(suffix, "T");
-	} else if (val >= giga) {
-		val /= mega;
-		dval = val / kilo;
-		strcpy(suffix, "G");
-	} else if (val >= mega) {
-		val /= kilo;
-		dval = val / kilo;
-		strcpy(suffix, "M");
-	} else if (val >= kilo) {
-		dval = val / kilo;
-		strcpy(suffix, "K");
-	} else {
-		dval = val;
-		if (dval < min_diff)
-			dval = 0.0;
-	}
+    if (val >= exa) {
+        val /= peta;
+        dval = val / kilo;
+        strcpy(suffix, "E");
+    } else if (val >= peta) {
+        val /= tera;
+        dval = val / kilo;
+        strcpy(suffix, "P");
+    } else if (val >= tera) {
+        val /= giga;
+        dval = val / kilo;
+        strcpy(suffix, "T");
+    } else if (val >= giga) {
+        val /= mega;
+        dval = val / kilo;
+        strcpy(suffix, "G");
+    } else if (val >= mega) {
+        val /= kilo;
+        dval = val / kilo;
+        strcpy(suffix, "M");
+    } else if (val >= kilo) {
+        dval = val / kilo;
+        strcpy(suffix, "K");
+    } else {
+        dval = val;
+        if (dval < min_diff)
+            dval = 0.0;
+    }
 
-	if (!sigdigits) {
-		if (decimal)
-			snprintf(buf, bufsiz, "%.3f%s", dval, suffix);
-		else
-			snprintf(buf, bufsiz, "%d%s", (unsigned int)dval, suffix);
-	} else {
-		/* Always show sigdigits + 1, padded on right with zeroes
-		 * followed by suffix */
-		int ndigits = sigdigits - 1 - (dval > 0.0 ? floor(log10(dval)) : 0);
+    if (!sigdigits) {
+        if (decimal)
+            snprintf(buf, bufsiz, "%.3f%s", dval, suffix);
+        else
+            snprintf(buf, bufsiz, "%d%s", (unsigned int)dval, suffix);
+    } else {
+        /* Always show sigdigits + 1, padded on right with zeroes
+         * followed by suffix */
+        int ndigits = sigdigits - 1 - (dval > 0.0 ? floor(log10(dval)) : 0);
 
-		snprintf(buf, bufsiz, "%*.*f%s", sigdigits + 1, ndigits, dval, suffix);
-	}
+        snprintf(buf, bufsiz, "%*.*f%s", sigdigits + 1, ndigits, dval, suffix);
+    }
 }

@@ -1,6 +1,7 @@
 #include "wifiManager.h"
 #include "wManager.h"  // For mMonitor and TSettings
 #include <WiFi.h>
+#include "log.h"
 
 // Declare external global variables
 extern nvMemory nvMem;
@@ -9,8 +10,14 @@ extern monitor_data mMonitor;
 
 WiFiManagerClass wifiManager;
 
+unsigned long configPortalStartTime = 0;
+
+void WiFiManagerClass::resetConfigPortalTimeout() {
+    configPortalStartTime = millis();
+}
+
 void WiFiManagerClass::init() {
-    Serial.println("WiFi Manager Initialization");
+    LOG(LOG_INFO, "WiFi Manager Initialization\n");
     
     // Load WiFi settings from non-volatile storage
     nvMem.loadConfig(&Settings);
@@ -23,10 +30,8 @@ void WiFiManagerClass::init() {
     delay(200);
     
     // Print out current WiFi credentials for debugging
-    Serial.print("Loaded SSID: ");
-    Serial.println(Settings.WifiSSID);
-    Serial.print("Loaded Password Length: ");
-    Serial.println(Settings.WifiPW.length());
+    LOG(LOG_DEBUG, "Loaded SSID: %s\n", Settings.WifiSSID.c_str());
+    LOG(LOG_DEBUG, "Loaded Password Length: %d\n", Settings.WifiPW.length());
     
     // Check if WiFi credentials are valid
     bool hasValidSSID = Settings.WifiSSID.length() > 0 && 
@@ -35,7 +40,7 @@ void WiFiManagerClass::init() {
                             Settings.WifiPW != String(DEFAULT_WIFIPW);
     
     if (!hasValidSSID || !hasValidPassword) {
-        Serial.println("No valid WiFi credentials found, starting Access Point");
+        LOG(LOG_WARN, "No valid WiFi credentials found, starting Access Point\n");
         startAccessPoint();
         return;
     }
@@ -45,18 +50,64 @@ void WiFiManagerClass::init() {
 }
 
 void WiFiManagerClass::process() {
-    // Detailed logging for configuration state
+    // Check configuration portal timeout
     if (mMonitor.NerdStatus == NM_waitingConfig) {
-        // Verbose WiFi mode and AP configuration logging
-        wifi_mode_t currentMode = WiFi.getMode();
-        Serial.printf("Current WiFi Mode (Before): %d\n", currentMode);
+        if (configPortalStartTime == 0) {
+            resetConfigPortalTimeout();
+        }
         
-        // Explicitly set WiFi mode to AP_STA only for configuration
+        // Check if config portal has been running too long
+        // But only if we're not actively using WiFi
+        if (WiFi.status() != WL_CONNECTED && 
+            (millis() - configPortalStartTime > CONFIG_PORTAL_TIMEOUT)) {
+            
+            LOG(LOG_WARN, "Configuration Portal Timeout Exceeded\n");
+            
+            // Attempt to recover or provide fallback
+            if (Settings.WifiSSID.length() > 0 && Settings.WifiPW.length() > 0) {
+                LOG(LOG_INFO, "Attempting to connect with saved credentials\n");
+                
+                // Soft reset WiFi
+                WiFi.disconnect(true, true);
+                delay(200);
+                WiFi.mode(WIFI_STA);
+                delay(200);
+                
+                // Attempt connection
+                WiFi.begin(Settings.WifiSSID.c_str(), Settings.WifiPW.c_str());
+                
+                // Update connection state
+                lastConnectionAttempt = millis();
+                currentState = NM_Connecting;
+                mMonitor.NerdStatus = NM_Connecting;
+                
+                // Reset config portal timeout
+                configPortalStartTime = 0;
+                
+                return;
+            } else {
+                // If no saved credentials, extend configuration time
+                LOG(LOG_WARN, "No saved credentials, extending configuration portal time\n");
+                
+                // Extend timeout and maintain AP mode
+                configPortalStartTime = millis();
+                WiFi.mode(WIFI_AP_STA);
+                IPAddress apIP(192, 168, 4, 1);
+                setupAccessPoint(apIP);
+                
+                return;
+            }
+        }
+        
+        // Existing AP setup logic
+        wifi_mode_t currentMode = WiFi.getMode();
+        LOG(LOG_DEBUG, "Current WiFi Mode (Before): %d\n", currentMode);
+        
         WiFi.mode(WIFI_AP_STA);
         delay(500);  // Longer delay for mode change
         
         currentMode = WiFi.getMode();
-        Serial.printf("Current WiFi Mode (After): %d\n", currentMode);
+        LOG(LOG_DEBUG, "Current WiFi Mode (After): %d\n", currentMode);
         
         // Setup Access Point
         IPAddress apIP(192, 168, 4, 1);
@@ -73,47 +124,46 @@ void WiFiManagerClass::process() {
                 wl_status_t wifiStatus = WiFi.status();
                 
                 if (wifiStatus == WL_CONNECTED) {
-                    Serial.println("WiFi Connected!");
-                    Serial.print("IP Address: ");
-                    Serial.println(WiFi.localIP());
+                    LOG(LOG_INFO, "WiFi Connected!\n");
+                    LOG(LOG_INFO, "IP Address: %s\n", WiFi.localIP().toString().c_str());
                     
                     // Stop soft AP and switch to STA mode
                     WiFi.softAPdisconnect(true);  // Explicitly stop soft AP
                     WiFi.mode(WIFI_STA);
                     delay(200);  // Small delay to ensure mode change
                     
+                    // Reset config portal timeout
+                    configPortalStartTime = 0;
+                    
                     // Verify network configuration
                     IPAddress localIP = WiFi.localIP();
                     IPAddress subnetMask = WiFi.subnetMask();
                     IPAddress gatewayIP = WiFi.gatewayIP();
                     
-                    Serial.println("Network Details:");
-                    Serial.print("Local IP: ");
-                    Serial.println(localIP);
-                    Serial.print("Subnet Mask: ");
-                    Serial.println(subnetMask);
-                    Serial.print("Gateway IP: ");
-                    Serial.println(gatewayIP);
+                    LOG(LOG_DEBUG, "Network Details:\n");
+                    LOG(LOG_DEBUG, "Local IP: %s\n", localIP.toString().c_str());
+                    LOG(LOG_DEBUG, "Subnet Mask: %s\n", subnetMask.toString().c_str());
+                    LOG(LOG_DEBUG, "Gateway IP: %s\n", gatewayIP.toString().c_str());
                     
                     mMonitor.NerdStatus = NM_Connected;
                     currentState = NM_Connected;
                 } 
                 else if (millis() - lastConnectionAttempt > CONNECTION_TIMEOUT) {
-                    Serial.println("Connection timeout, starting Access Point");
+                    LOG(LOG_WARN, "Connection timeout, starting Access Point\n");
                     
                     // Log detailed connection failure reasons
                     switch (wifiStatus) {
                         case WL_NO_SSID_AVAIL:
-                            Serial.println("No SSID Available");
+                            LOG(LOG_ERROR, "No SSID Available\n");
                             break;
                         case WL_CONNECT_FAILED:
-                            Serial.println("Connection Failed");
+                            LOG(LOG_ERROR, "Connection Failed\n");
                             break;
                         case WL_IDLE_STATUS:
-                            Serial.println("Idle Status");
+                            LOG(LOG_WARN, "Idle Status\n");
                             break;
                         default:
-                            Serial.printf("Connection Status: %d\n", wifiStatus);
+                            LOG(LOG_ERROR, "Connection Status: %d\n", wifiStatus);
                             break;
                     }
                     
@@ -123,9 +173,36 @@ void WiFiManagerClass::process() {
             break;
         
         case NM_Connected:
-            if (WiFi.status() != WL_CONNECTED) {
-                Serial.println("WiFi Disconnected, attempting to reconnect");
-                connectToSavedNetwork();
+            {
+                // Enhanced connection monitoring
+                static unsigned long lastConnectionCheck = 0;
+                const unsigned long CONNECTION_CHECK_INTERVAL = 10000;  // 10 seconds
+                
+                if (WiFi.status() != WL_CONNECTED) {
+                    LOG(LOG_WARN, "WiFi Disconnected, attempting to reconnect\n");
+                    
+                    // Comprehensive WiFi reset
+                    WiFi.disconnect(true, true);
+                    delay(200);
+                    WiFi.mode(WIFI_OFF);
+                    delay(200);
+                    WiFi.mode(WIFI_STA);
+                    WiFi.setAutoConnect(true);
+                    WiFi.setAutoReconnect(true);
+                    
+                    // Attempt reconnection
+                    WiFi.begin(Settings.WifiSSID.c_str(), Settings.WifiPW.c_str());
+                    
+                    // Update states
+                    currentState = NM_Connecting;
+                    mMonitor.NerdStatus = NM_Connecting;
+                    lastConnectionAttempt = millis();
+                }
+                else if (millis() - lastConnectionCheck > CONNECTION_CHECK_INTERVAL) {
+                    // Periodic connection health check
+                    lastConnectionCheck = millis();
+                    LOG(LOG_DEBUG, "Periodic WiFi Connection Check: %d\n", WiFi.status());
+                }
             }
             break;
         
@@ -139,7 +216,7 @@ void WiFiManagerClass::process() {
 void WiFiManagerClass::setupAccessPoint(const IPAddress& apIP) {
     // Only configure soft AP if in configuration mode
     if (mMonitor.NerdStatus != NM_waitingConfig) {
-        Serial.println("Not in configuration mode, skipping AP setup");
+        LOG(LOG_WARN, "Not in configuration mode, skipping AP setup\n");
         return;
     }
 
@@ -148,7 +225,7 @@ void WiFiManagerClass::setupAccessPoint(const IPAddress& apIP) {
     IPAddress gateway(192, 168, 4, 1);
     
     // Verbose soft AP configuration
-    Serial.println("Configuring Soft AP:");
+    LOG(LOG_INFO, "Configuring Soft AP:\n");
     
     // Ensure WiFi is in AP_STA mode for configuration
     WiFi.mode(WIFI_AP_STA);
@@ -156,7 +233,7 @@ void WiFiManagerClass::setupAccessPoint(const IPAddress& apIP) {
     
     // Configure soft AP with gateway and subnet
     bool apConfigResult = WiFi.softAPConfig(apIP, gateway, subnet);
-    Serial.printf("AP Config Result: %s\n", apConfigResult ? "Success" : "Failed");
+    LOG(LOG_INFO, "AP Config Result: %s\n", apConfigResult ? "Success" : "Failed");
     
     // Start Soft AP with detailed parameters
     bool apStartResult = WiFi.softAP(
@@ -166,21 +243,22 @@ void WiFiManagerClass::setupAccessPoint(const IPAddress& apIP) {
         false,               // Hidden
         4                    // Max connections
     );
-    Serial.printf("Soft AP Start Result: %s\n", apStartResult ? "Success" : "Failed");
+    LOG(LOG_INFO, "Soft AP Start Result: %s\n", apStartResult ? "Success" : "Failed");
     
     // Verify AP details
-    Serial.print("AP SSID: ");
-    Serial.println(WiFi.softAPSSID());
-    Serial.print("AP IP: ");
-    Serial.println(WiFi.softAPIP());
+    LOG(LOG_INFO, "AP SSID: %s\n", WiFi.softAPSSID().c_str());
+    LOG(LOG_INFO, "AP IP: %s\n", WiFi.softAPIP().toString().c_str());
     
     // Additional diagnostic information
-    Serial.printf("Station IP: %s\n", WiFi.localIP().toString().c_str());
-    Serial.printf("Soft AP IP: %s\n", WiFi.softAPIP().toString().c_str());
+    LOG(LOG_DEBUG, "Station IP: %s\n", WiFi.localIP().toString().c_str());
+    LOG(LOG_DEBUG, "Soft AP IP: %s\n", WiFi.softAPIP().toString().c_str());
 }
 
 void WiFiManagerClass::startAccessPoint() {
-    Serial.println("Starting Access Point Mode (Detailed)");
+    LOG(LOG_INFO, "Starting Access Point Mode (Detailed)\n");
+    
+    // Reset config portal timeout
+    resetConfigPortalTimeout();
     
     // Comprehensive WiFi reset
     WiFi.disconnect(true, true);  // Disconnect and clear credentials
@@ -201,7 +279,7 @@ void WiFiManagerClass::startAccessPoint() {
 }
 
 void WiFiManagerClass::connectToSavedNetwork() {
-    Serial.println("Attempting to connect to saved WiFi network");
+    LOG(LOG_INFO, "Attempting to connect to saved WiFi network\n");
     
     // Comprehensive WiFi reset and configuration
     WiFi.disconnect(true, true);  // Disconnect and clear credentials
@@ -214,10 +292,8 @@ void WiFiManagerClass::connectToSavedNetwork() {
     WiFi.setAutoReconnect(true);
     
     // Print out connection details for debugging
-    Serial.print("Connecting to SSID: ");
-    Serial.println(Settings.WifiSSID);
-    Serial.print("Using Password: ");
-    Serial.println(Settings.WifiPW.length() > 0 ? "***" : "NONE");
+    LOG(LOG_DEBUG, "Connecting to SSID: %s\n", Settings.WifiSSID.c_str());
+    LOG(LOG_DEBUG, "Using Password: %s\n", Settings.WifiPW.length() > 0 ? "***" : "NONE");
     
     // Validate WiFi credentials before attempting connection
     if (Settings.WifiSSID.length() == 0 || 
@@ -225,7 +301,7 @@ void WiFiManagerClass::connectToSavedNetwork() {
         Settings.WifiPW.length() == 0 || 
         Settings.WifiPW == String(DEFAULT_WIFIPW)) {
         
-        Serial.println("Invalid WiFi credentials, starting Access Point");
+        LOG(LOG_WARN, "Invalid WiFi credentials, starting Access Point\n");
         startAccessPoint();
         return;
     }
@@ -245,21 +321,21 @@ void WiFiManagerClass::connectToSavedNetwork() {
     while (WiFi.status() != WL_CONNECTED) {
         // Print connection status periodically
         if (millis() - connectionStartTime > CONNECTION_TIMEOUT) {
-            Serial.println("WiFi Connection Timeout!");
+            LOG(LOG_WARN, "WiFi Connection Timeout!\n");
             
             // Detailed WiFi connection status logging
             switch (WiFi.status()) {
                 case WL_NO_SSID_AVAIL:
-                    Serial.println("No SSID Available");
+                    LOG(LOG_ERROR, "No SSID Available\n");
                     break;
                 case WL_CONNECT_FAILED:
-                    Serial.println("Connection Failed");
+                    LOG(LOG_ERROR, "Connection Failed\n");
                     break;
                 case WL_IDLE_STATUS:
-                    Serial.println("Idle Status");
+                    LOG(LOG_WARN, "Idle Status\n");
                     break;
                 default:
-                    Serial.printf("Connection Status: %d\n", WiFi.status());
+                    LOG(LOG_ERROR, "Connection Status: %d\n", WiFi.status());
                     break;
             }
             
@@ -270,16 +346,15 @@ void WiFiManagerClass::connectToSavedNetwork() {
         
         // Periodic status update
         if (millis() % 1000 == 0) {
-            Serial.print(".");
+            LOG(LOG_DEBUG, ".\n");
         }
         
         delay(100);
     }
     
     // Connection successful
-    Serial.println("\nWiFi Connected Successfully!");
-    Serial.print("IP Address: ");
-    Serial.println(WiFi.localIP());
+    LOG(LOG_INFO, "WiFi Connected Successfully!\n");
+    LOG(LOG_INFO, "IP Address: %s\n", WiFi.localIP().toString().c_str());
     
     // Update connection state
     currentState = NM_Connected;
@@ -309,7 +384,7 @@ String WiFiManagerClass::getAccessPointSSID() const {
 }
 
 int WiFiManagerClass::scanNetworks(bool logResults, bool includeHidden) {
-    Serial.println("Starting WiFi Network Scan...");
+    LOG(LOG_INFO, "Starting WiFi Network Scan...\n");
     
     // Configure scan parameters
     WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
@@ -319,10 +394,10 @@ int WiFiManagerClass::scanNetworks(bool logResults, bool includeHidden) {
     int networksFound = WiFi.scanNetworks(includeHidden);
     
     if (networksFound > 0 && logResults) {
-        Serial.printf("Networks Found: %d\n", networksFound);
+        LOG(LOG_INFO, "Networks Found: %d\n", networksFound);
         
         for (int i = 0; i < networksFound; i++) {
-            Serial.printf("Network %d: SSID: %s, RSSI: %d, Channel: %d, Encryption: %d\n", 
+            LOG(LOG_DEBUG, "Network %d: SSID: %s, RSSI: %d, Channel: %d, Encryption: %d\n", 
                 i, 
                 WiFi.SSID(i).c_str(), 
                 WiFi.RSSI(i), 
@@ -331,7 +406,7 @@ int WiFiManagerClass::scanNetworks(bool logResults, bool includeHidden) {
             );
         }
     } else {
-        Serial.println("No networks found or scan failed.");
+        LOG(LOG_WARN, "No networks found or scan failed.\n");
     }
     
     return networksFound;

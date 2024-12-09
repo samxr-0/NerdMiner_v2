@@ -697,8 +697,30 @@ void wifiManagerProcess() {
 
     // Optional: Add a timeout for configuration portal
     if (portalRunning && (millis() - portalStartTime > CONFIG_PORTAL_TIMEOUT)) {
-        Serial.println("Configuration Portal Timeout, Restarting...");
-        ESP.restart();
+        // If WiFi credentials exist, attempt to connect instead of restarting
+        if (Settings.WifiSSID.length() > 0 && Settings.WifiPW.length() > 0) {
+            Serial.println("Configuration Portal Timeout, Attempting Saved WiFi Connection...");
+            
+            // Disconnect and clear current WiFi state
+            WiFi.disconnect(true, true);
+            delay(200);
+            WiFi.mode(WIFI_STA);
+            delay(200);
+            
+            // Attempt connection with saved credentials
+            WiFi.begin(Settings.WifiSSID.c_str(), Settings.WifiPW.c_str());
+            
+            // Reset portal tracking
+            portalRunning = false;
+            portalStartTime = 0;
+            
+            // Update monitor status
+            mMonitor.NerdStatus = NM_Connecting;
+        } else {
+            // If no saved credentials, restart
+            Serial.println("Configuration Portal Timeout, No Saved WiFi, Restarting...");
+            ESP.restart();
+        }
     }
 }
 

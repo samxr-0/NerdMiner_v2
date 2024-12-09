@@ -34,10 +34,12 @@ public:
 private:
     NMState currentState = NM_waitingConfig;
     unsigned long lastConnectionAttempt = 0;
-    const unsigned long CONNECTION_TIMEOUT = 10000; // 10 seconds
+    unsigned long configPortalStartTime = 0;
+    const unsigned long CONNECTION_TIMEOUT = 10000; // 10 seconds for connection
     
     // Internal helper methods
     void setupAccessPoint(const IPAddress& apIP);
+    void resetConfigPortalTimeout();
 };
 
 extern WiFiManagerClass wifiManager;
